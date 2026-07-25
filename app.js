@@ -11,13 +11,66 @@ let state = {
   // Detallado (switch a la derecha) agrega el contexto FaceIt a cada tarjeta — el antiguo
   // switch separado "Sin/Con contexto FaceIt" se fusionó aquí, no debe quedar un control
   // obsoleto operando en paralelo con otro nombre.
-  // Punto 5 de la Matriz de priorización: `lang` ya existe en el
-  // estado para que toda función de render pueda resolver texto vía
-  // `t(key, state.lang)`. Fijo en "es" por ahora — el selector visible
-  // ES/EN y su persistencia (fases 6-7 del plan de i18n, Sección 4.4
-  // de la revisión) quedan fuera de esta ronda de cambios.
-  lang: "es",
+  // `lang` resuelve texto vía `t(key, state.lang)` en toda función de
+  // render. Ya no es un valor fijo: se inicializa con
+  // `detectInitialLang()` (detección de navigator.language, ver más
+  // abajo) y puede cambiarse en caliente desde el selector de idioma
+  // del header (#langSwitch), sin recargar la página.
+  lang: detectInitialLang(),
 };
+
+// ============================================================
+// Selector de idioma (header, junto a "¿Cómo funciona?")
+//
+// DETECCIÓN AUTOMÁTICA: al cargar la página, se usa el idioma del
+// navegador (`navigator.language`, ej. "es-MX", "en-US", "fr-FR") para
+// elegir un idioma inicial razonable. Solo se distinguen dos casos:
+//   - el idioma del navegador empieza con "es" (cualquier variante
+//     regional: es-ES, es-MX, es-AR...) -> español.
+//   - CUALQUIER OTRO idioma (en, fr, de, pt, ja, etc.) -> inglés, como
+//     fallback universal — el proyecto solo tiene diccionario ES/EN
+//     (ver i18n.js), así que un francófono ve inglés antes que un
+//     español que no habla, igual que la convención habitual de la
+//     mayoría de sitios bilingües ES/EN.
+// El usuario puede sobreescribir esta detección en cualquier momento
+// con el selector visible; ese cambio NO se persiste entre sesiones
+// (cada carga vuelve a detectar desde navigator.language) porque el
+// proyecto no usa localStorage en ningún otro sitio y no hay backend
+// de preferencias de usuario — mantener esa misma restricción aquí
+// evita introducir el único punto de persistencia de todo el proyecto
+// solo para esto.
+function detectInitialLang() {
+  const navLang = (navigator.language || navigator.userLanguage || "en").toLowerCase();
+  return navLang.startsWith("es") ? "es" : "en";
+}
+
+// Banderas como SVG inline (mismo criterio que el resto de los íconos
+// del proyecto: nunca imágenes externas ni glifos de fuente/emoji,
+// que varían de apariencia según SO/fuente instalada). Círculo de
+// recorte vía <clipPath> para que ambas encajen en el contenedor
+// circular de 16x16 que define el CSS (.flag), sin depender de que el
+// SVG "sepa" que va a mostrarse recortado en un círculo.
+const FLAG_ES = `<svg viewBox="0 0 24 24" width="16" height="16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <clipPath id="clipEs"><circle cx="12" cy="12" r="12"/></clipPath>
+  <g clip-path="url(#clipEs)">
+    <rect width="24" height="24" fill="#AA151B"/>
+    <rect y="6" width="24" height="12" fill="#F1BF00"/>
+  </g>
+</svg>`;
+
+const FLAG_GB = `<svg viewBox="0 0 24 24" width="16" height="16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <clipPath id="clipGb"><circle cx="12" cy="12" r="12"/></clipPath>
+  <g clip-path="url(#clipGb)">
+    <rect width="24" height="24" fill="#00247D"/>
+    <path d="M0 0 L24 24 M24 0 L0 24" stroke="#FFFFFF" stroke-width="4.5"/>
+    <path d="M0 0 L24 24 M24 0 L0 24" stroke="#CF142B" stroke-width="1.6"/>
+    <path d="M12 0 V24 M0 12 H24" stroke="#FFFFFF" stroke-width="7.5"/>
+    <path d="M12 0 V24 M0 12 H24" stroke="#CF142B" stroke-width="4.2"/>
+  </g>
+</svg>`;
+
+const FLAG_BY_LANG = { es: FLAG_ES, en: FLAG_GB };
+const LANG_CODE_LABEL = { es: "ESP", en: "ENG" };
 
 // ============================================================
 // Punto 10 de la Matriz de priorización: carga diferida real de
@@ -109,8 +162,16 @@ const els = {
   compactOnLabel: document.getElementById("compactOnLabel"),
   addManual: document.getElementById("addManual"),
   howBtn: document.getElementById("howBtn"),
+  howBtnLabel: document.getElementById("howBtnLabel"),
   howModal: document.getElementById("howModal"),
   closeModal: document.getElementById("closeModal"),
+  langSwitch: document.getElementById("langSwitch"),
+  langBtn: document.getElementById("langBtn"),
+  langBtnFlag: document.getElementById("langBtnFlag"),
+  langBtnCode: document.getElementById("langBtnCode"),
+  langMenu: document.getElementById("langMenu"),
+  langOptEs: document.getElementById("langOptEs"),
+  langOptEn: document.getElementById("langOptEn"),
 };
 
 // ---------- Modal "¿Cómo funciona?" ----------
@@ -129,6 +190,67 @@ els.howModal.addEventListener("click", (e) => {
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && els.howModal.classList.contains("open")) closeHowModal();
 });
+
+// ---------- Selector de idioma ----------
+
+// Pinta banderas + código, marca la opción activa en el menú, y
+// traduce el texto estático del header (el botón "¿Cómo funciona?" y
+// el contenido del modal, que no pasa por render() como las tarjetas
+// de mapa). Se llama una vez al cargar y cada vez que cambia state.lang.
+function applyLangToStaticUI() {
+  const lang = state.lang;
+  els.langBtnFlag.innerHTML = FLAG_BY_LANG[lang];
+  els.langBtnCode.textContent = LANG_CODE_LABEL[lang];
+  els.langBtn.setAttribute("aria-label", t("ui.lang_switch_label", lang));
+
+  els.langOptEs.classList.toggle("active", lang === "es");
+  els.langOptEn.classList.toggle("active", lang === "en");
+  els.langOptEs.setAttribute("aria-selected", String(lang === "es"));
+  els.langOptEn.setAttribute("aria-selected", String(lang === "en"));
+
+  els.howBtnLabel.textContent = t("ui.how_it_works_btn", lang);
+  document.documentElement.lang = lang;
+}
+
+// Rellena las banderas dentro del propio menú (ES/EN), una sola vez —
+// a diferencia del botón principal (que cambia según el idioma
+// activo), las opciones del menú siempre muestran SU PROPIA bandera
+// fija, sin importar cuál esté seleccionada.
+els.langOptEs.querySelector(".flag").innerHTML = FLAG_ES;
+els.langOptEn.querySelector(".flag").innerHTML = FLAG_GB;
+
+function openLangMenu() {
+  els.langMenu.classList.add("open");
+  els.langBtn.setAttribute("aria-expanded", "true");
+}
+function closeLangMenu() {
+  els.langMenu.classList.remove("open");
+  els.langBtn.setAttribute("aria-expanded", "false");
+}
+function setLang(lang) {
+  if (state.lang === lang) { closeLangMenu(); return; }
+  state.lang = lang;
+  applyLangToStaticUI();
+  render(); // re-traduce todo el texto dinámico (tarjetas, chips, listas de prioridad)
+  closeLangMenu();
+}
+
+els.langBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  const isOpen = els.langMenu.classList.contains("open");
+  if (isOpen) closeLangMenu(); else openLangMenu();
+});
+els.langOptEs.addEventListener("click", () => setLang("es"));
+els.langOptEn.addEventListener("click", () => setLang("en"));
+
+document.addEventListener("click", (e) => {
+  if (!els.langSwitch.contains(e.target)) closeLangMenu();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && els.langMenu.classList.contains("open")) closeLangMenu();
+});
+
+applyLangToStaticUI();
 
 // ---------- Uploader interactions ----------
 

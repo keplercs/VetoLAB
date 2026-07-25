@@ -78,6 +78,10 @@ const I18N = {
     // ---- app.js: badge de warnings sobre cada tarjeta de mapa ----
     "ui.warning_badge_single": "revisar",
     "ui.warning_badge_plural": "{count} avisos",
+
+    // ---- app.js: header (botón "¿Cómo funciona?" y selector de idioma) ----
+    "ui.how_it_works_btn": "¿Cómo funciona?",
+    "ui.lang_switch_label": "Cambiar idioma",
   },
 
   en: {
@@ -122,6 +126,10 @@ const I18N = {
     // ---- app.js: warning badge on each map card ----
     "ui.warning_badge_single": "review",
     "ui.warning_badge_plural": "{count} warnings",
+
+    // ---- app.js: header ("How it works" button and language switch) ----
+    "ui.how_it_works_btn": "How does it work?",
+    "ui.lang_switch_label": "Change language",
   },
 };
 

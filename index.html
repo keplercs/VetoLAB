@@ -111,6 +111,48 @@
   .how-btn:hover{ border-color:var(--cool); color:var(--text); }
   .how-btn .ic{ flex-shrink:0; }
 
+  /* --- Selector de idioma ---
+     Se ubica junto a "¿Cómo funciona?" en el header. Al cargar la
+     página, `detectInitialLang()` (app.js) lee `navigator.language`
+     para elegir ES o EN por defecto — este control permite al usuario
+     cambiarlo manualmente después, sin recargar la página (re-renderiza
+     todo el texto ya traducible vía t()/state.lang, ver app.js). La
+     bandera es SVG inline (mismo criterio que el resto de los íconos
+     del proyecto — nunca glifos de fuente ni imágenes externas), y el
+     bloque completo es un <button> real para que el foco/activación
+     por teclado funcione sin JS adicional.
+  */
+  .header-controls{ display:flex; align-items:center; gap:10px; }
+  .lang-switch{ position:relative; }
+  .lang-btn{
+    display:flex; align-items:center; gap:7px;
+    background:var(--surface); border:1px solid var(--line-bright); color:var(--text-dim);
+    font-family:var(--mono); font-size:11.5px; font-weight:700; letter-spacing:0.5px;
+    padding:8px 14px; border-radius:999px; cursor:pointer; transition:border-color .15s, color .15s;
+  }
+  .lang-btn:hover, .lang-btn[aria-expanded="true"]{ border-color:var(--cool); color:var(--text); }
+  .lang-btn .flag{ width:16px; height:16px; border-radius:50%; flex-shrink:0; display:block; overflow:hidden; }
+  .lang-btn .chev{ flex-shrink:0; transition:transform .15s; }
+  .lang-btn[aria-expanded="true"] .chev{ transform:rotate(180deg); }
+
+  .lang-menu{
+    display:none;
+    position:absolute; top:calc(100% + 6px); right:0; z-index:30;
+    background:var(--bg-raised); border:1px solid var(--line-bright); border-radius:8px;
+    padding:5px; min-width:118px; box-shadow:0 8px 22px #000a;
+  }
+  .lang-menu.open{ display:block; }
+  .lang-opt{
+    display:flex; align-items:center; gap:8px; width:100%;
+    background:none; border:none; color:var(--text-dim);
+    font-family:var(--mono); font-size:11.5px; font-weight:600; letter-spacing:0.4px;
+    padding:8px 9px; border-radius:5px; cursor:pointer; text-align:left;
+  }
+  .lang-opt:hover{ background:var(--surface-2); color:var(--text); }
+  .lang-opt.active{ color:var(--cool); }
+  .lang-opt .flag{ width:16px; height:16px; border-radius:50%; flex-shrink:0; display:block; overflow:hidden; }
+  .lang-opt .check{ margin-left:auto; color:var(--cool); flex-shrink:0; }
+
   /* --- Uploader --- */
   .uploader{
     max-width:720px; margin:32px auto 0;
@@ -569,14 +611,37 @@
     </div>
     <div class="brand-sub">apoyo a decisión · veto de mapas CS2</div>
   </div>
-  <button class="how-btn" id="howBtn" type="button">
-    <svg class="ic" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
-      <circle cx="8" cy="8" r="6.3"/>
-      <line x1="8" y1="7.1" x2="8" y2="11.3" stroke-linecap="round"/>
-      <circle cx="8" cy="4.8" r="0.9" fill="currentColor" stroke="none"/>
-    </svg>
-    ¿Cómo funciona?
-  </button>
+  <div class="header-controls">
+    <div class="lang-switch" id="langSwitch">
+      <button class="lang-btn" id="langBtn" type="button" aria-haspopup="listbox" aria-expanded="false" aria-label="Cambiar idioma / Change language">
+        <span class="flag" id="langBtnFlag" aria-hidden="true"><!-- se rellena con JS: FLAG_ES o FLAG_GB --></span>
+        <span id="langBtnCode">ESP</span>
+        <svg class="chev" viewBox="0 0 16 16" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M4 6 L8 10 L12 6"/>
+        </svg>
+      </button>
+      <div class="lang-menu" id="langMenu" role="listbox">
+        <button class="lang-opt" id="langOptEs" type="button" role="option" data-lang="es">
+          <span class="flag" aria-hidden="true"><!-- FLAG_ES --></span>
+          <span>ESP</span>
+          <svg class="check" viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5 L6.5 12 L13 4.5"/></svg>
+        </button>
+        <button class="lang-opt" id="langOptEn" type="button" role="option" data-lang="en">
+          <span class="flag" aria-hidden="true"><!-- FLAG_GB --></span>
+          <span>ENG</span>
+          <svg class="check" viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5 L6.5 12 L13 4.5"/></svg>
+        </button>
+      </div>
+    </div>
+    <button class="how-btn" id="howBtn" type="button">
+      <svg class="ic" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+        <circle cx="8" cy="8" r="6.3"/>
+        <line x1="8" y1="7.1" x2="8" y2="11.3" stroke-linecap="round"/>
+        <circle cx="8" cy="4.8" r="0.9" fill="currentColor" stroke="none"/>
+      </svg>
+      <span id="howBtnLabel">¿Cómo funciona?</span>
+    </button>
+  </div>
 </header>
 
 <main id="mainEl">
