@@ -16,7 +16,7 @@ let state = {
   // `detectInitialLang()` (detección de navigator.language, ver más
   // abajo) y puede cambiarse en caliente desde el selector de idioma
   // del header (#langSwitch), sin recargar la página.
-  lang: detectInitialLang(),
+  lang: resolveInitialLang(),
 };
 
 // ============================================================
@@ -33,15 +33,46 @@ let state = {
 //     español que no habla, igual que la convención habitual de la
 //     mayoría de sitios bilingües ES/EN.
 // El usuario puede sobreescribir esta detección en cualquier momento
-// con el selector visible; ese cambio NO se persiste entre sesiones
-// (cada carga vuelve a detectar desde navigator.language) porque el
-// proyecto no usa localStorage en ningún otro sitio y no hay backend
-// de preferencias de usuario — mantener esa misma restricción aquí
-// evita introducir el único punto de persistencia de todo el proyecto
-// solo para esto.
+// con el selector visible. Ese cambio SÍ se persiste entre sesiones
+// (Grupo 5 #1 de la Guía de seguimiento y resolución de errores) vía
+// una única clave de `localStorage` (`LANG_STORAGE_KEY`, ver
+// `resolveInitialLang()`/`setLang()` más abajo) — se acepta
+// conscientemente como el único punto de persistencia de todo el
+// proyecto, porque es exactamente el caso que lo amerita: sin esto,
+// cualquier elección manual del usuario se perdía en cada recarga,
+// volviendo siempre a la detección automática por navegador.
 function detectInitialLang() {
   const navLang = (navigator.language || navigator.userLanguage || "en").toLowerCase();
   return navLang.startsWith("es") ? "es" : "en";
+}
+
+// Grupo 5 #1 de la Guía de seguimiento y resolución de errores —
+// "Falta persistencia del idioma seleccionado manualmente". Antes,
+// `state.lang` se inicializaba SIEMPRE con `detectInitialLang()`
+// (detección por `navigator.language`), así que cualquier elección
+// manual del usuario en el selector se perdía en la siguiente carga
+// de página. `resolveInitialLang()` intenta primero leer una elección
+// manual persistida en `localStorage` (clave `LANG_STORAGE_KEY`,
+// validando que el valor sea exactamente "es" o "en" — nunca se
+// confía ciegamente en el contenido de storage, que puede haber sido
+// modificado o corrompido fuera de esta app) y solo si no existe o la
+// lectura falla (modo privado, política de navegador que bloquea
+// storage, etc.) cae al comportamiento anterior de detección por
+// idioma del navegador. Este es el único punto de persistencia de
+// todo el proyecto (ver comentario histórico más arriba); se acepta
+// conscientemente como el único caso que lo amerita, en vez de dejar
+// que cada selección manual se pierda en cada recarga.
+const LANG_STORAGE_KEY = "vetolab_lang";
+
+function resolveInitialLang() {
+  try {
+    const stored = localStorage.getItem(LANG_STORAGE_KEY);
+    if (stored === "es" || stored === "en") return stored;
+  } catch (err) {
+    // Storage inaccesible (modo privado, política del navegador, etc.):
+    // se seguirá con la detección normal, sin propagar el error.
+  }
+  return detectInitialLang();
 }
 
 // Banderas como SVG inline (mismo criterio que el resto de los íconos
@@ -230,6 +261,13 @@ function closeLangMenu() {
 function setLang(lang) {
   if (state.lang === lang) { closeLangMenu(); return; }
   state.lang = lang;
+  try {
+    localStorage.setItem(LANG_STORAGE_KEY, lang);
+  } catch (err) {
+    // Igual que en resolveInitialLang(): si storage no está disponible,
+    // el cambio de idioma sigue funcionando para esta sesión, solo no
+    // sobrevive a un refresh — no es un error que deba interrumpir nada.
+  }
   applyLangToStaticUI();
   render(); // re-traduce todo el texto dinámico (tarjetas, chips, listas de prioridad)
   closeLangMenu();
@@ -297,23 +335,53 @@ document.addEventListener("paste", (e) => {
   }
 });
 
+// Grupo 4 #1 de la Guía de seguimiento y resolución de errores ("carga
+// de imágenes: restringir a una sola") — el veto es sobre un único
+// conjunto de mapas por partida, así que no tiene sentido de negocio
+// mantener varias capturas de origen distinto activas en la misma
+// sesión (dos capturas no pueden pertenecer a dos vetos simultáneos).
+//
+// ANTES: `<input multiple>` + este `forEach` permitían acumular N
+// imágenes, cada una fusionada vía `mergeMaps` — lo que obligaba a
+// `mergeMaps` a resolver "colisión entre fuentes" (mismo nombre de
+// mapa detectado en dos imágenes distintas) como si fuera un caso
+// normal esperado, cuando en realidad no debería poder ocurrir si solo
+// existe una imagen a la vez.
+//
+// AHORA: cualquier imagen nueva REEMPLAZA por completo el estado
+// anterior (decisión tomada explícitamente: reemplazo automático, sin
+// pedir confirmación) — se limpia `state.maps`, `state.nextOrder`, el
+// contenedor de miniaturas (`els.thumbs`) y cualquier progreso de OCR
+// en pantalla antes de procesar la nueva captura. Si llegan varios
+// archivos a la vez (ej. selección múltiple burlando el `<input>` sin
+// `multiple`, o un drop con más de un archivo), solo se conserva el
+// primero — coherente con "un solo veto, una sola imagen a la vez" en
+// vez de silenciosamente aceptar el resto.
 function handleFiles(files) {
-  files.forEach((file) => {
-    const sourceId = `src_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const url = URL.createObjectURL(file);
-    const thumb = document.createElement("div");
-    thumb.className = "thumb";
-    thumb.dataset.sourceId = sourceId;
-    thumb.innerHTML = `<img src="${url}"><div class="rm" role="button" aria-label="Quitar imagen"><svg viewBox="0 0 16 16" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M3 3 L13 13 M13 3 L3 13"/></svg></div>`;
-    thumb.querySelector(".rm").addEventListener("click", (e) => {
-      e.stopPropagation();
-      thumb.remove();
-      state.maps = state.maps.filter((m) => m.sourceId !== sourceId);
-      render();
-    });
-    els.thumbs.appendChild(thumb);
-    runOCR(file, url, sourceId);
+  const file = files[0];
+  if (!file) return;
+
+  state.maps = [];
+  state.nextOrder = 0;
+  state.editingIndex = null;
+  els.thumbs.innerHTML = "";
+  els.scanStatus.style.display = "none";
+  render();
+
+  const sourceId = `src_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const url = URL.createObjectURL(file);
+  const thumb = document.createElement("div");
+  thumb.className = "thumb";
+  thumb.dataset.sourceId = sourceId;
+  thumb.innerHTML = `<img src="${url}"><div class="rm" role="button" aria-label="Quitar imagen"><svg viewBox="0 0 16 16" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M3 3 L13 13 M13 3 L3 13"/></svg></div>`;
+  thumb.querySelector(".rm").addEventListener("click", (e) => {
+    e.stopPropagation();
+    thumb.remove();
+    state.maps = state.maps.filter((m) => m.sourceId !== sourceId);
+    render();
   });
+  els.thumbs.appendChild(thumb);
+  runOCR(file, url, sourceId);
 }
 
 // ---------- Detección de filas por geometría + OCR por fila ----------
@@ -335,6 +403,21 @@ function loadImageToCanvas(url) {
 
 const STATS_ZONE_X_START = 0.55;
 const STATS_ZONE_X_END = 0.98;
+
+// Grupo 7 de la Guía de seguimiento y resolución de errores —
+// "identificación de mapa por ícono, con OCR de texto como
+// corroboración". Zona horizontal donde vive el ícono/thumbnail del
+// mapa dentro de la fila (posición fija en la interfaz de TAPIT.GG:
+// el bloque miniatura+nombre+★ ocupa el inicio de la fila, ANTES de
+// donde empieza la franja de stats — ver STATS_ZONE_X_START arriba,
+// que ya marca ese mismo límite desde el otro lado). Se usa un rango
+// angosto (0 a 0.14) en vez de todo el tramo hasta STATS_ZONE_X_START
+// porque el ícono en sí es un cuadrado pequeño al extremo izquierdo;
+// el resto del tramo izquierdo es el nombre de texto del mapa (zona
+// que ya cubre `findMapNameInRow`/MAP_NAME_PATTERN sobre el propio
+// texto OCR, no sobre imagen).
+const ICON_ZONE_X_START = 0;
+const ICON_ZONE_X_END = 0.14;
 
 function estimateBackgroundColor(imgData, width, height, xStart, xEnd) {
   const samples = [];
@@ -505,6 +588,39 @@ function looksLikeMapGrid(bands) {
   return Math.max(...heights) / Math.min(...heights) < 2.2;
 }
 
+// ------------------------------------------------------------
+// Grupo 1 #1 de la Guia de seguimiento y resolucion de errores --
+// "No existe un rechazo explicito de conteos imposibles".
+//
+// ANTES: un conteo de bandas geometricamente IMPOSIBLE dado el juego
+// real (ej. 12 bandas detectadas -- el pool de veto de FACEIT esta
+// temporada nunca puede producir mas de 8 filas ni menos de 3, ver
+// `isPlausibleMapCount`/`MIN_PLAUSIBLE_MAP_COUNT`/
+// `MAX_PLAUSIBLE_MAP_COUNT` en parser.js) caia por el mismo camino que
+// un conteo de 4/5/6 (posible pero infrecuente): `looksLikeMapGrid`
+// devolvia `false` para ambos por igual, degradando silenciosamente a
+// `runWholeImageOCR` sin ninguna senal de que, a diferencia de 4/5/6,
+// ese conteo no puede corresponder a una captura real del veto -- es
+// evidencia de que la deteccion de bandas (o el recorte/imagen
+// subida) fallo, no solo de que cayo en un regimen "menos confiable".
+//
+// AHORA: `flagImplausibleBandCount` se consulta en `runOCR` justo
+// despues de `detectRowBands`, ANTES de decidir el pipeline. Si el
+// conteo es implausible, se registra para adjuntar un warning
+// explicito y distinto ("conteo de filas geometricamente imposible --
+// revisar recorte", `warning.band_count_implausible` en i18n.js) a
+// cada fila que finalmente se extraiga por el camino de
+// `runWholeImageOCR` (que sigue intentandose igual -- un conteo de
+// bandas raro no impide que el patron numerico de texto si encuentre
+// filas reales; simplemente ya no se pretende que la geometria haya
+// sido confiable). No se usa para bloquear el analisis ni para lanzar
+// una excepcion: sigue siendo mejor mostrar datos con advertencia
+// explicita que no mostrar nada.
+function flagImplausibleBandCount(bandCount) {
+  if (bandCount === 0) return false; // "0 filas" ya tiene su propio mensaje dedicado en runOCR, no se duplica aqui
+  return typeof isPlausibleMapCount === "function" && !isPlausibleMapCount(bandCount);
+}
+
 function applyGrayscaleAutocontrast(ctx, w, h) {
   const imgData = ctx.getImageData(0, 0, w, h);
   const d = imgData.data;
@@ -578,6 +694,39 @@ function cropStatsZoneToDataURL(sourceCanvas, band) {
   return cropRowToDataURL(sourceCanvas, band, Math.max(0, STATS_ZONE_X_START - 0.25), STATS_ZONE_X_END, 4);
 }
 
+// Grupo 7: recorte del ícono para `identifyMapByIcon` (iconMatch.js).
+// A diferencia de `cropRowToDataURL`, este recorte NO aplica
+// `applyGrayscaleAutocontrast` ni `suppressIconColors` — ambos
+// preprocesos existen para maximizar la lectura de TEXTO por Tesseract
+// (blanco/negro de alto contraste, sin el tinte ámbar que confunde al
+// OCR), pero son exactamente lo que hay que EVITAR aquí: el hash
+// perceptual de `computeDHash` (iconMatch.js) se calculó sobre
+// imágenes de referencia a color, y aplicar el mismo preprocesado
+// agresivo movería la imagen recortada lejos de esas referencias en
+// vez de acercarla. Se devuelve el canvas crudo (no un dataURL) porque
+// `computeDHash` trabaja directamente sobre canvas — evita una vuelta
+// innecesaria por codificación PNG/base64 solo para decodificarla de
+// nuevo del otro lado.
+function cropIconZoneToCanvas(sourceCanvas, band) {
+  const pad = Math.max(8, Math.round(band.h * 0.18));
+  const y0 = Math.max(0, band.y0 - pad);
+  const y1 = Math.min(sourceCanvas.height, band.y1 + pad);
+  const fullW = sourceCanvas.width;
+  const x0 = Math.floor(fullW * ICON_ZONE_X_START);
+  const x1 = Math.ceil(fullW * ICON_ZONE_X_END);
+  const w = x1 - x0;
+  const h = y1 - y0;
+
+  const out = document.createElement("canvas");
+  out.width = w;
+  out.height = h;
+  const octx = out.getContext("2d");
+  octx.imageSmoothingEnabled = true;
+  octx.imageSmoothingQuality = "high";
+  octx.drawImage(sourceCanvas, x0, y0, w, h, 0, 0, w, h);
+  return out;
+}
+
 async function runPerRowOCR(sourceCanvas, bands, fileName, bg) {
   const worker = await Tesseract.createWorker("eng", 1, {
     logger: (m) => {
@@ -614,6 +763,36 @@ async function runPerRowOCR(sourceCanvas, bands, fileName, bg) {
       // vez de repetir el literal aquí, para que ambos pipelines
       // (por fila y de imagen completa) usen exactamente el mismo texto.
       let noPoolFallback = false;
+      let iconMatched = false;
+      if (!mapName) {
+        // Grupo 7 de la Guía de seguimiento y resolución de errores:
+        // antes de caer al fallback posicional CIEGO (que asume el
+        // N-ésimo mapa del pool sin ninguna evidencia real de que ESE
+        // mapa sea el correcto), se intenta identificar el mapa por su
+        // ícono — evidencia visual real, aunque de una fuente distinta
+        // al texto. Esto NUNCA se ejecuta si `findMapNameInRow` ya tuvo
+        // éxito (ver `if (!mapName)` arriba): el ícono es estrictamente
+        // un fallback más fuerte que el posicional, nunca un mecanismo
+        // que compita con o sobrescriba al OCR de texto.
+        //
+        // Se descarta un match cuyo nombre ya fue usado en una fila
+        // anterior de esta misma captura (`usedFallbackSlots`) — dos
+        // filas no pueden ser legítimamente el mismo mapa, y aceptar
+        // ese match duplicado sería peor que no tener corroboración
+        // visual (terminaría en la misma desambiguación de colisión de
+        // nombre que ya maneja `parser.js`, pero por una causa que sí
+        // pudo evitarse aquí).
+        try {
+          const iconCanvas = cropIconZoneToCanvas(sourceCanvas, bands[i]);
+          const iconResult = (typeof identifyMapByIcon === "function") ? identifyMapByIcon(iconCanvas) : null;
+          if (iconResult && !usedFallbackSlots.has(iconResult.map)) {
+            mapName = iconResult.map;
+            iconMatched = true;
+          }
+        } catch (iconErr) {
+          console.warn("Identificación por ícono falló, se continúa con fallback posicional:", iconErr);
+        }
+      }
       if (!mapName) {
         if (fallbackPool) {
           const positional = !usedFallbackSlots.has(fallbackPool[i])
@@ -638,12 +817,12 @@ async function runPerRowOCR(sourceCanvas, bands, fileName, bg) {
       if (!nums) {
         rows.push({
           map: mapName, pA: 50, nA: 0, pB: 50, nB: 0,
-          nameGuessed, noPoolFallback, ocrFailed: true,
+          nameGuessed, noPoolFallback, iconMatched, ocrFailed: true,
         });
         continue;
       }
 
-      rows.push({ map: mapName, ...nums, nameGuessed, noPoolFallback });
+      rows.push({ map: mapName, ...nums, nameGuessed, noPoolFallback, iconMatched });
     }
   } finally {
     await worker.terminate();
@@ -729,6 +908,15 @@ async function runOCR(file, previewUrl, sourceId) {
     const sourceCanvas = await loadImageToCanvas(previewUrl);
     const { bands, bg } = detectRowBands(sourceCanvas);
 
+    // Grupo 1 #1 de la Guía de seguimiento: se evalúa la plausibilidad
+    // geométrica del conteo de bandas ANTES de decidir el pipeline. Un
+    // conteo implausible (ej. 12) no bloquea el intento de análisis —
+    // solo se registra para adjuntar un warning explícito a cada fila
+    // resultante, distinto del que ya reciben los conteos 4/5/6
+    // (posibles pero sin fallback posicional) o del que reciben las
+    // capturas con 0 filas detectadas.
+    const bandCountImplausible = flagImplausibleBandCount(bands.length);
+
     let validated;
     if (looksLikeMapGrid(bands)) {
       try {
@@ -739,6 +927,14 @@ async function runOCR(file, previewUrl, sourceId) {
       }
     } else {
       validated = await runWholeImageOCR(previewUrl, file.name);
+    }
+
+    if (bandCountImplausible) {
+      validated = validated.map((row) => ({
+        ...row,
+        warnings: [...(row.warnings || []), { code: "band_count_implausible", params: { count: bands.length } }],
+        needsReview: true,
+      }));
     }
 
     const elapsedSec = ((performance.now() - t0) / 1000).toFixed(1);
@@ -816,6 +1012,16 @@ function humanizeStatus(status) {
 // fuentes: se conserva la fila nueva con nombre desambiguado y se marca
 // `needsReview` con un warning explícito, igual que la desambiguación ya
 // aplicada dentro de una sola captura en `parser.js` (punto 3).
+//
+// NOTA (Grupo 4 #1 de la Guía de seguimiento): desde que `handleFiles`
+// restringe la carga a una sola imagen a la vez (reemplazando por
+// completo el estado anterior en vez de fusionar), la rama de
+// "colisión entre fuentes" de abajo ya no debería poder dispararse en
+// la práctica — nunca coexisten dos `sourceId` distintos en
+// `state.maps`. No se elimina en este fix (es deuda técnica anotada,
+// no un bug activo): se deja tal cual para una ronda de limpieza
+// posterior, por si en el futuro se reintroduce alguna vía de tener
+// más de una fuente activa.
 function mergeMaps(newRows) {
   newRows.forEach((row) => {
     const sameSourceIdx = state.maps.findIndex(
@@ -1062,8 +1268,16 @@ function priorityReasonText(a) {
 //     CONTENIDO (no atributo) — se abre/cierra por click/tap vía el
 //     listener delegado registrado en initInfoPopovers() más abajo, y
 //     también por :hover en dispositivos que sí tienen hover (CSS).
-// title se conserva como respaldo silencioso para navegadores muy
-// antiguos sin JS, pero deja de ser el único mecanismo.
+//
+// Grupo 3, issue #3 (Guía de seguimiento y resolución de errores):
+// `title` se eliminó por completo de este elemento. Antes convivía
+// junto a `.info-popover` como "respaldo silencioso para navegadores
+// sin JS", pero en la práctica ambos mecanismos se disparaban a la vez
+// en hover (tooltip nativo del navegador + popover propio superpuestos
+// visualmente), que es exactamente la duplicación reportada. Se
+// prioriza el popover diseñado como único mecanismo visual; `aria-label`
+// se conserva íntegro para lectores de pantalla, que no dependen de
+// `title` para anunciar el contenido de un elemento con `role="button"`.
 function priorityItemHTML(a, i, sign) {
   const deltaClass = sign === "neg" ? "neg" : "pos";
   const d = perspectiveDelta(a);
@@ -1075,7 +1289,7 @@ function priorityItemHTML(a, i, sign) {
     <span class="priority-left">
       <span class="rank">${i + 1}.</span>
       <span class="m">${a.map}</span>
-      <span class="info-ic" tabindex="0" role="button" aria-expanded="false" aria-label="${safeReason}" title="${safeReason}">${INFO_ICON_SVG}<span class="info-popover">${safeReason}</span></span>
+      <span class="info-ic" tabindex="0" role="button" aria-expanded="false" aria-label="${safeReason}">${INFO_ICON_SVG}<span class="info-popover">${safeReason}</span></span>
     </span>
     <span class="d delta ${deltaClass}">${deltaTxt}</span>
   </div>`;
@@ -1153,8 +1367,8 @@ function renderMapCard(a, index) {
             ${barRow(oppLabel, oppWilson, oppAdj, true)}
           </div>
           <div class="raw-values">
-            <span>Izq.: <b>${raw.pA}%</b> (n=${raw.nA})</span>
-            <span>Der.: <b>${raw.pB}%</b> (n=${raw.nB})</span>
+            <span>Izq.: <b>${raw.pA}%</b></span>
+            <span>Der.: <b>${raw.pB}%</b></span>
           </div>
         </div>
         <div class="decision">
@@ -1219,18 +1433,40 @@ function renderMapCard(a, index) {
 // para lectores de pantalla. El texto mostrado es idéntico al que
 // antes solo vivía en `title` — no se pierde información, solo se hace
 // alcanzable sin mouse.
+//
+// Grupo 3, issue #3: se elimina el atributo `title` de `.bar-track`
+// por el mismo motivo que en `priorityItemHTML` — con ambos mecanismos
+// presentes a la vez, el navegador dispara su tooltip nativo (`title`)
+// superpuesto al `.info-popover` propio en hover, produciendo la
+// duplicación visual reportada. `aria-label` se mantiene intacto para
+// lectores de pantalla; el popover diseñado queda como único mecanismo
+// visible tanto en hover (CSS `@media(hover:hover)`) como en click/tap
+// (JS, `initInfoPopovers()`).
 function barRow(label, wilson, adjPoint, isB) {
   const ciLeft = wilson.low * 100;
   const ciWidth = (wilson.high - wilson.low) * 100;
   const pointLeft = adjPoint * 100;
   // Sección 1 del pedido: el texto "n=.. · IC95 ..–..%" se oculta en
-  // modo compacto (CSS .maplist.compact .bar-n), pero la misma info
-  // sigue accesible tocando/pasando el mouse sobre la barra (popover).
+  // modo compacto (CSS .maplist.compact .bar-n / .raw-values), pero la
+  // misma info sigue accesible tocando/pasando el mouse sobre la barra
+  // (popover). Punto 6 de la Matriz de priorización (Grupo 3): criterio
+  // final de una única fuente por dato — bar-n/popover muestran
+  // ÚNICAMENTE n + IC95 (nunca el % crudo, que ya vive en raw-values),
+  // y raw-values (ver renderMapCard) muestra ÚNICAMENTE el % crudo sin
+  // repetir "(n=X)" — cada representación aporta algo distinto en vez
+  // de que las tres (bar-n, popover, raw-values) dupliquen el mismo dato.
   const infoTitle = `${label}: n=${wilson.n} · IC95 ${(wilson.low * 100).toFixed(0)}–${(wilson.high * 100).toFixed(0)}%`;
   const safeTitle = escapeHtml(infoTitle);
+  // Grupo 3, issue #2: el popover describe el punto ajustado
+  // (.bar-point, en pointLeft%), así que debe anclarse ahí en vez del
+  // left:0 fijo anterior. Se pasa pointLeft como variable CSS inline
+  // (--pt), igual que --grad-color en priorityItemHTML — el CSS
+  // resuelve el centrado y el clamp de borde contra esta variable en
+  // vez de que JS calcule píxeles absolutos (el ancho real de
+  // .bar-track no se conoce en este punto, solo en el navegador).
   return `<div class="bar-row">
     <span class="team-label">${label}</span>
-    <div class="bar-track" tabindex="0" role="button" aria-expanded="false" aria-label="${safeTitle}" title="${safeTitle}">
+    <div class="bar-track" tabindex="0" role="button" aria-expanded="false" aria-label="${safeTitle}" style="--pt:${pointLeft}%;">
       <div class="bar-ci ${isB ? 'b' : ''}" style="left:${ciLeft}%; width:${ciWidth}%;"></div>
       <div class="bar-point" style="left:calc(${pointLeft}% - 1px);"></div>
       <span class="info-popover">${safeTitle}</span>

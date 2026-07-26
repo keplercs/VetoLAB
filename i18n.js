@@ -47,8 +47,10 @@ const I18N = {
     "warning.ocr_failed": "fila detectada pero ilegible tras OCR (posible fusión con fila vecina) — completar manualmente",
     "warning.name_guessed_no_pool": "nombre de mapa no reconocido y sin candidato posicional confiable (pool no estándar, ej. FACEIT Premium) — completar manualmente",
     "warning.name_guessed_positional": "nombre de mapa no reconocido por OCR — asignado por posición dentro del pool activo, verificar",
+    "warning.name_guessed_icon_match": "nombre de mapa no reconocido por OCR de texto — corroborado por el ícono del mapa, verificar",
     "warning.name_collision_same_capture": "nombre de mapa duplicado en esta captura — se detectaron dos filas para el mismo mapa, revisa cuál es correcta",
     "warning.name_collision_cross_source": "nombre de mapa duplicado entre distintas capturas — se detectó este mapa en más de una imagen subida, revisa cuál es correcta",
+    "warning.band_count_implausible": "conteo de filas geométricamente imposible ({count}) — el pool de veto de esta temporada solo puede tener entre 3 y 8 mapas, revisa el recorte de la captura",
 
     // ---- math.js: dirección de sesgo por asimetría muestral (Sección 4.3) ----
     "bias.a": "Tu muestra es más grande y estable; el winrate rival (menos partidas) tiende a regresar hacia 50%. La ventaja real probablemente esté subestimada por el diferencial crudo.",
@@ -95,8 +97,10 @@ const I18N = {
     "warning.ocr_failed": "row detected but unreadable after OCR (possibly merged with a neighboring row) — fill in manually",
     "warning.name_guessed_no_pool": "map name not recognized and no reliable positional candidate (non-standard pool, e.g. FACEIT Premium) — fill in manually",
     "warning.name_guessed_positional": "map name not recognized by OCR — assigned by position within the active pool, please verify",
+    "warning.name_guessed_icon_match": "map name not recognized by text OCR — corroborated by the map's icon, please verify",
     "warning.name_collision_same_capture": "duplicate map name within this capture — two rows were detected for the same map, please check which one is correct",
     "warning.name_collision_cross_source": "duplicate map name across different captures — this map was detected in more than one uploaded image, please check which one is correct",
+    "warning.band_count_implausible": "geometrically impossible row count ({count}) — this season's veto pool can only have between 3 and 8 maps, please check the capture's crop",
 
     // ---- math.js: sample-asymmetry bias direction (Section 4.3) ----
     "bias.a": "Your sample is larger and more stable; the opponent's winrate (fewer games) tends to regress toward 50%. The raw differential likely understates your real advantage.",

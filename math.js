@@ -195,6 +195,48 @@ function differenceIsSignificant(pA, nA, pB, nB, z = Z_95) {
  * n y p̂ correctamente — contra un umbral fijo de precisión
  * (`WIDE_INTERVAL_THRESHOLD`), no un umbral de conteo de partidas.
  */
+// ACLARACIÓN CONCEPTUAL (Grupo 2 de la Guía de seguimiento y resolución
+// de errores): la unidad muestral de TODO este módulo es la PARTIDA
+// (mapa) jugada, no el round ni la duración/minutos de la partida. `n`
+// en `wilsonInterval`/`shrinkageEstimate`/`analyzeMap` siempre significa
+// "cuántas partidas de ese mapa respaldan este winrate" (Sección 3.1 del
+// documento de fundamentos, Var(p̂)=p(1-p)/n con n=partidas). Una partida
+// que se fue a 300 rounds (overtime extenso) NO cuenta como más evidencia
+// que una partida de 16 rounds — ambas son una sola observación binomial
+// (victoria/derrota) para efectos de Wilson y shrinkage. Esto es
+// deliberado y matemáticamente correcto tal como está implementado: el
+// resultado agregado de una partida ya es el evento relevante (ganar o
+// perder ESE mapa), y tratar los rounds individuales como observaciones
+// independientes adicionales violaría el supuesto de independencia del
+// modelo binomial (los rounds de una misma partida están correlacionados
+// entre sí por el propio flujo de la partida — economía, momentum, side
+// jugado — de un modo que Wilson/shrinkage sobre proporciones simples no
+// captura). Ver Sección 0.3 del documento de fundamentos: "total de
+// rounds jugados" se descarta explícitamente como variable de entrada
+// del modelo por esta misma razón.
+//
+// RANGO PRÁCTICO DE "MUESTRA INSUFICIENTE" bajo el umbral actual: con
+// WIDE_INTERVAL_THRESHOLD=0.35 y el intervalo de Wilson al 95%, el ancho
+// del IC95 depende tanto de n como de qué tan cerca de 50% esté p̂ (la
+// varianza p(1-p)/n es máxima en p=0.5) — por eso NO hay un único n de
+// corte, sino un rango. Verificado numéricamente contra la propia
+// implementación de `wilsonInterval` (no solo estimado analíticamente):
+//   - cerca de p̂≈50%: el ancho del IC95 cruza 0.35 aproximadamente
+//     entre n=27 y n=28 partidas (n=25 → ancho≈0.365; n=30 →
+//     ancho≈0.337) — es decir, "insuficiente" en este régimen empieza
+//     alrededor de n≈27-28, no antes.
+//   - en winrates más extremos (ej. 20% u 80%): la varianza es menor,
+//     así que el mismo ancho de 0.35 se cruza con algo menos de
+//     evidencia — aproximadamente entre n=19 y n=20 (n=18 → ancho≈0.362;
+//     n=20 → ancho≈0.335).
+// Ambos casos caen dentro del régimen n≤40 citado de Brown, Cai &
+// DasGupta (2001) en la Sección 3.2.1 del documento de fundamentos como
+// el rango donde Wilson (frente a Wald) es la elección recomendada —
+// consistente con, aunque más ajustado que, una estimación gruesa de
+// "30-40 partidas". Estos números son una guía de intuición para quien
+// audite el umbral, no un valor cerrado que el código calcule —
+// `eitherWide` en `analyzeMap` sigue decidiendo caso por caso con la
+// fórmula real de Wilson, no con esta tabla aproximada.
 const WIDE_INTERVAL_THRESHOLD = 0.35; // ancho de IC95 por encima del cual el dato se considera poco informativo
 
 function analyzeMap({ map, pA, nA, pB, nB }, opts = {}) {

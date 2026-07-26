@@ -341,9 +341,21 @@
   .edit-btn{ font-size:10.5px; color:var(--text-faint); cursor:pointer; letter-spacing:0.5px; white-space:nowrap; }
   .edit-btn:hover{ color:var(--danger); }
 
-  /* card-main: 2/3 modelo matemático | 1/3 contexto FaceIt (solo si el
-     switch de contexto FaceIt está activo — ver .hide-faceit abajo). */
-  .card-main{ display:grid; grid-template-columns:2fr 1fr; gap:14px; padding-left:6px; }
+  /* card-main: modelo matemático (ancho flexible) | contexto FaceIt
+     (solo si el switch de contexto FaceIt está activo — ver
+     .hide-faceit abajo). Punto 4 de la Matriz de priorización (Grupo 3):
+     antes `1fr` fijo reservaba una columna de ancho considerable para
+     `.faceit-ctx` sin importar que su contenido real (2 líneas cortas
+     de estadística, o el estado vacío `.ctx-empty`) casi nunca necesita
+     tanto espacio — quitándole ancho innecesario a `.card-math`, que sí
+     tiene contenido variable (gráfico + valores + delta). Con
+     `minmax(140px, max-content)`, la columna de contexto se ajusta al
+     contenido real (nunca baja de 140px, suficiente para "Pick-rate
+     (28 abr – 12 may)" + valor sin quebrar feo) y `.card-math` recibe
+     el resto vía `1fr`. Sigue colapsando a una sola columna en el
+     media query de 820px (sin cambios ahí) y sigue comportándose bien
+     con `.ctx-empty` (texto corto, no fuerza la columna a expandirse). */
+  .card-main{ display:grid; grid-template-columns:1fr minmax(140px, max-content); gap:14px; padding-left:6px; }
   .card-math{ display:grid; grid-template-columns:1fr auto; gap:14px; align-items:center; }
 
   .bars{ display:flex; gap:10px; align-items:stretch; }
@@ -361,12 +373,30 @@
   .bar-point{ position:absolute; top:0; bottom:0; width:2px; background:var(--text); }
   .bar-n{ color:var(--text-faint); white-space:nowrap; }
 
-  /* Popover de la barra IC95 — mismo patrón visual que .info-popover,
-     pero anclado a la izquierda en vez de centrado (la barra suele
-     estar cerca del borde derecho de la tarjeta; centrado se saldría
-     del viewport en pantallas angostas). */
-  .bar-track .info-popover{ left:0; transform:none; bottom:calc(100% + 7px); }
-  .bar-track .info-popover::after{ left:14px; transform:none; }
+  /* Grupo 3, issue #2: el popover ahora se ancla sobre `--pt` (la
+     posición real de .bar-point, en %, inyectada inline por barRow()
+     en app.js) en vez del left:0 fijo anterior — el dato que describe
+     el popover es el punto ajustado, así que debe aparecer centrado
+     sobre él. Se usa clamp() sobre el propio porcentaje (no sobre
+     transform) para que, cerca de los extremos (mapas con pointLeft
+     próximo a 0% o 100%), el popover se recorte contra el borde del
+     track en vez de salirse del viewport de la tarjeta — el mismo
+     ajuste que haría un transform condicional, pero resuelto en CSS
+     puro sin necesitar JS adicional para detectar el borde. Ver nota
+     aparte sobre el ::after (la flechita) justo debajo. */
+  .bar-track .info-popover{
+    left: clamp(20%, var(--pt, 50%), 80%);
+    transform: translateX(-50%);
+    bottom: calc(100% + 7px);
+  }
+  /* El ::after (flechita) está posicionado relativo al propio
+     .info-popover (su contenedor directo), no a .bar-track — por eso
+     se queda en left:50% fijo (su centro), heredado del patrón base de
+     .info-popover::after más abajo. Cuando el clamp() de arriba recorta
+     el popover contra el borde del track, la flechita se desplaza junto
+     con él (sigue centrada en el cuerpo del popover) en vez de seguir
+     apuntando exactamente a --pt — un desfase leve y aceptable frente a
+     la alternativa de que el popover completo se salga del viewport. */
   .bar-track.open .info-popover{ display:block; }
   @media (hover:hover){
     .bar-track:hover .info-popover{ display:block; }
@@ -374,24 +404,39 @@
 
   /* Modo compacto (Sección 1 del pedido): oculta el texto "n=.. · IC95
      ..–..%" junto a cada barra — la misma información sigue disponible
-     tocando/pasando el mouse sobre la barra (popover, ver arriba). En
-     vez de una línea aparte debajo del gráfico ("Izq.: 59% (n=39) ·
-     Der.: 67% (n=15)"), esas cifras crudas se muestran junto a la
-     gráfica, en una columna angosta a su derecha — visibles siempre en
-     modo compacto, y también disponibles (duplicadas por accesibilidad
-     de un vistazo) en modo detallado dentro de esa misma columna. */
+     tocando/pasando el mouse sobre la barra (popover, ver arriba).
+     Punto 5 de la Matriz de priorización (Grupo 3): además de `.bar-n`,
+     en modo compacto también se oculta `.raw-values` ("Izq.: 46%
+     (n=37) · Der.: 56% (n=41)") — esa línea es información redundante
+     que el propio gráfico de barras ya representa visualmente (la
+     posición/ancho de cada barra codifica el mismo dato). El criterio
+     de UX es que en compacto SOLO quede visible la caja informativa
+     accesible por tap/hover sobre la barra (el popover), sin ninguna
+     cifra fija duplicada en texto. En modo detallado, `.raw-values`
+     sigue visible — ver Grupo 3 #6 para qué contenido exacto muestra
+     ahí (solo % crudo, sin repetir n= que ya vive en bar-n/popover). */
   .maplist.compact .bar-n{ display:none; }
+  .maplist.compact .raw-values{ display:none; }
 
   .raw-values{
     display:flex; flex-direction:column; justify-content:center; gap:4px;
     font-size:10.5px; color:var(--text-faint);
-    padding-left:12px; border-left:1px solid var(--line);
     flex-shrink:0; white-space:nowrap;
   }
   .raw-values span{ display:flex; justify-content:space-between; gap:10px; }
   .raw-values b{ color:var(--text-dim); font-weight:600; }
 
-  .decision{ text-align:right; display:flex; flex-direction:column; gap:1px; align-items:flex-end; min-width:88px; }
+  /* Grupo 3, issue #1: el separador visual debe marcar el límite entre
+     "gráfico + valores crudos" (.bars, columna izquierda de .card-math)
+     y "delta/decisión" (.decision, columna derecha) — no un corte
+     interno dentro de .bars como estaba antes (border-left vivía en
+     .raw-values, separando el gráfico de sus propios valores crudos).
+     Se mueve el border-left/padding-left aquí, al borde real entre
+     ambas columnas del grid. */
+  .decision{
+    text-align:right; display:flex; flex-direction:column; gap:1px; align-items:flex-end; min-width:88px;
+    padding-left:14px; border-left:1px solid var(--line);
+  }
   .decision .delta{ font-family:var(--cond); font-size:24px; font-weight:700; line-height:1; }
   .decision .delta.pos{ color:var(--cool); }
   .decision .delta.neg{ color:var(--danger); }
@@ -522,7 +567,15 @@
 
   @media (max-width:640px){
     .card-math{ grid-template-columns:1fr; }
-    .decision{ flex-direction:row; align-items:baseline; gap:10px; text-align:left; }
+    .decision{
+      flex-direction:row; align-items:baseline; gap:10px; text-align:left;
+      /* .bars y .decision quedan apilados verticalmente en vez de en
+         columnas — un border-left ya no separa nada visualmente aquí;
+         se convierte en border-top (con padding-top a juego) para
+         seguir marcando la misma transición, ahora horizontal. */
+      border-left:none; padding-left:0;
+      border-top:1px solid var(--line); padding-top:8px;
+    }
     .sec-head p{ max-width:92vw; }
   }
 </style>
@@ -544,7 +597,7 @@
       <div class="body">
         <h4>Sube la captura de la fase de veto</h4>
         <p>Arrastra el archivo, haz clic para seleccionarlo, o <b>pega directamente desde el portapapeles</b>
-        con <kbd>Ctrl</kbd>+<kbd>V</kbd> (<kbd>⌘</kbd>+<kbd>V</kbd> en Mac) — útil si tomaste el screenshot
+        con <kbd>Ctrl</kbd>+<kbd>V</kbd> — útil si tomaste el screenshot
         y lo tienes copiado sin guardar el archivo.</p>
         <div class="modal-method-grid">
           <span>Arrastrar y soltar</span>
@@ -647,7 +700,7 @@
 <main id="mainEl">
   <div class="pre-upload">
     <div class="uploader" id="dropZone">
-      <input type="file" id="fileInput" accept="image/*" multiple>
+      <input type="file" id="fileInput" accept="image/*">
       <div class="uploader-icon">
         <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <rect x="3" y="4.5" width="18" height="15" rx="2"/>
@@ -656,7 +709,7 @@
         </svg>
       </div>
       <h3>Sube una captura del veto</h3>
-      <p title="Arrastra el archivo, haz clic para seleccionarlo, o pégalo con Ctrl+V / ⌘+V">Arrastra, selecciona o pega con <kbd>Ctrl</kbd>+<kbd>V</kbd></p>
+      <p title="Arrastra el archivo, haz clic para seleccionarlo, o pégalo con Ctrl+V">Arrastra, selecciona o pega con <kbd>Ctrl</kbd>+<kbd>V</kbd></p>
       <span class="btn">Seleccionar imágenes</span>
       <div class="thumbs" id="thumbs"></div>
       <div id="scanStatus">
@@ -711,13 +764,14 @@
      botella real, que era Tesseract.js), pero no hay razón para no
      dejarlo explícito. `defer` además GARANTIZA el orden de ejecución
      relativo entre scripts (i18n -> faceitContext -> math -> parser ->
-     app), que es justo el orden de dependencia que app.js necesita —
+     iconMatch -> app), que es justo el orden de dependencia que app.js necesita —
      mismo comportamiento que ya tenían por estar al final del <body>,
      ahora declarado explícitamente en vez de depender de la posición. -->
 <script src="i18n.js" defer></script>
 <script src="faceitContext.js" defer></script>
 <script src="math.js" defer></script>
 <script src="parser.js" defer></script>
+<script src="iconMatch.js" defer></script>
 <script src="app.js" defer></script>
 </body>
 </html>

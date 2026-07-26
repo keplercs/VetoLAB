@@ -51,10 +51,13 @@ console.log("=== Test de regresión: app.js (gate looksLikeMapGrid, punto 11) ==
 const appSource = fs.readFileSync(path.join(__dirname, "app.js"), "utf8");
 
 // Extrae desde la declaración de RELIABLE_BAND_COUNTS hasta el cierre
-// de looksLikeMapGrid (ancla de inicio/fin por texto literal presente
-// en app.js — si cualquiera de las dos anclas deja de existir porque
-// la función se renombró o se movió, este test falla explícitamente
-// en vez de silenciosamente probar una versión vieja).
+// de looksLikeMapGrid Y, a continuación, hasta el cierre de
+// flagImplausibleBandCount (Grupo 1 #1 — la función que consulta
+// isPlausibleMapCount de parser.js para decidir el warning de conteo
+// geométricamente imposible). Ancla de inicio/fin por texto literal
+// presente en app.js — si cualquiera de las anclas deja de existir
+// porque la función se renombró o se movió, este test falla
+// explícitamente en vez de silenciosamente probar una versión vieja.
 const startAnchor = "const RELIABLE_BAND_COUNTS = new Set([3, 7, 8]);";
 const endAnchorFn = "function looksLikeMapGrid(bands) {";
 const startIdx = appSource.indexOf(startAnchor);
@@ -67,16 +70,54 @@ const fnBodyStart = appSource.indexOf("{", fnStartIdx);
 const fnBodyEnd = appSource.indexOf("\n}", fnBodyStart);
 assert.ok(fnBodyEnd !== -1, "No se pudo determinar el cierre de looksLikeMapGrid en app.js");
 
-const extractedSource = appSource.slice(startIdx, fnBodyEnd + 2);
+// Extensión (Grupo 1 #1): busca flagImplausibleBandCount justo después
+// de looksLikeMapGrid y, si existe, extiende el bloque extraído hasta
+// su cierre también. Si la función no existe todavía (versión previa
+// de app.js sin este fix), el bloque extraído se limita al original y
+// los tests de flagImplausibleBandCount más abajo hacen SKIP en vez de
+// fallar — no penaliza a quien todavía no aplicó el fix.
+const flagAnchor = "function flagImplausibleBandCount(bandCount) {";
+const flagStartIdx = appSource.indexOf(flagAnchor, fnBodyEnd);
+let extractedEnd = fnBodyEnd + 2;
+if (flagStartIdx !== -1) {
+  const flagBodyStart = appSource.indexOf("{", flagStartIdx);
+  const flagBodyEnd = appSource.indexOf("\n}", flagBodyStart);
+  if (flagBodyEnd !== -1) extractedEnd = flagBodyEnd + 2;
+}
+
+const extractedSource = appSource.slice(startIdx, extractedEnd);
 
 // Evalúa el bloque extraído en un scope aislado y expone
-// looksLikeMapGrid + RELIABLE_BAND_COUNTS para el resto del test.
+// looksLikeMapGrid + RELIABLE_BAND_COUNTS (+ flagImplausibleBandCount,
+// si se extrajo) para el resto del test.
+//
+// isPlausibleMapCount se inyecta como global del sandbox ANTES de
+// evaluar el bloque extraído — en el navegador real, parser.js se
+// carga como <script> normal (no módulo) antes que app.js (ver el
+// orden `defer` en index.html: i18n -> faceitContext -> math ->
+// parser -> app), así que isPlausibleMapCount ya existe como global
+// cuando flagImplausibleBandCount se define. Aquí se replica esa
+// misma disponibilidad importando la función real de parser.js, en
+// vez de una reimplementación paralela que podría desincronizarse.
+let isPlausibleMapCountForSandbox;
+try {
+  ({ isPlausibleMapCount: isPlausibleMapCountForSandbox } = require("./parser.js"));
+} catch (err) {
+  isPlausibleMapCountForSandbox = undefined;
+}
+
 const sandbox = {};
 // eslint-disable-next-line no-new-func
 new Function(
   "sandbox",
-  `${extractedSource}\nsandbox.looksLikeMapGrid = looksLikeMapGrid;\nsandbox.RELIABLE_BAND_COUNTS = RELIABLE_BAND_COUNTS;`
-)(sandbox);
+  "isPlausibleMapCount",
+  `${extractedSource}
+sandbox.looksLikeMapGrid = looksLikeMapGrid;
+sandbox.RELIABLE_BAND_COUNTS = RELIABLE_BAND_COUNTS;
+if (typeof flagImplausibleBandCount === "function") sandbox.flagImplausibleBandCount = flagImplausibleBandCount;`
+)(sandbox, isPlausibleMapCountForSandbox);
+
+const { flagImplausibleBandCount } = sandbox;
 
 const { looksLikeMapGrid, RELIABLE_BAND_COUNTS } = sandbox;
 
@@ -199,7 +240,7 @@ check("RELIABLE_BAND_COUNTS contiene exactamente {3, 7, 8}, ni más ni menos", (
 // relacionadas pero distintas — este test verifica cada una por
 // separado en vez de asumir que son la misma.
 try {
-  const { buildFallbackPool } = require("./parser.js");
+  const { buildFallbackPool, STANDARD_ORDER } = require("./parser.js");
 
   check("n=7 y n=8 (pool posicional completo) tienen un buildFallbackPool NO NULO", () => {
     assert.ok(buildFallbackPool(7) !== null, "buildFallbackPool(7) no debería ser null");
@@ -210,8 +251,127 @@ try {
     assert.strictEqual(buildFallbackPool(3), null, "buildFallbackPool(3) debe seguir siendo null por diseño");
     assert.strictEqual(looksLikeMapGrid(makeBands(3)), true, "looksLikeMapGrid debe aceptar 3 bandas igualmente");
   });
+
+  // Grupo 1 #2 de la Guía de seguimiento y resolución de errores —
+  // "buildFallbackPool no distingue 4/5/6 de 'tamaño inesperado
+  // (>8)'". Antes de este fix, 4/5/6 devolvían `null` (comportamiento
+  // ya correcto), pero ningún test lo verificaba explícitamente —
+  // solo el caso 3 tenía cobertura. Estos tres casos replican
+  // exactamente el mismo patrón de aserción usado arriba para n=3:
+  // buildFallbackPool debe seguir siendo null (sin fallback
+  // posicional inventado), y NO deben confundirse con el caso >8
+  // ("tamaño inesperado"), que sí devuelve STANDARD_ORDER como
+  // fallback conservador — un comportamiento deliberadamente distinto
+  // que estos tests dejan trazado para que una futura modificación de
+  // buildFallbackPool no colapse 4/5/6 dentro de la rama de >8 por
+  // error de rango.
+  //
+  // NOTA sobre looksLikeMapGrid: a diferencia de n=3 (que SÍ pertenece
+  // a RELIABLE_BAND_COUNTS y por tanto pasa el pipeline por fila),
+  // 4/5/6 NO pertenecen a ese set — looksLikeMapGrid(4/5/6) debe
+  // seguir siendo false (ver bloque de tests más arriba en este mismo
+  // archivo). Esa es precisamente la asimetría documentada en el
+  // comentario de buildFallbackPool en parser.js: "conteo de bandas
+  // confiable" (RELIABLE_BAND_COUNTS, decide si corre el pipeline por
+  // fila) y "pool posicional no-nulo" (buildFallbackPool, decide si
+  // hay nombres que asignar por posición) son propiedades
+  // relacionadas pero distintas. Por eso aquí NO se repite una
+  // aserción sobre looksLikeMapGrid para 4/5/6 — ya está cubierta
+  // arriba, y afirmar aquí que "debe aceptarlo igualmente" como en el
+  // caso de n=3 sería incorrecto y contradictorio con esos tests.
+  check("n=4 (variante intermedia, ej. doble baneo asimétrico): buildFallbackPool debe ser NULO, mismo tratamiento que n=3 — no debe confundirse con el fallback conservador de '>8'", () => {
+    assert.strictEqual(buildFallbackPool(4), null, "buildFallbackPool(4) debe ser null, igual que buildFallbackPool(3)");
+  });
+
+  check("n=5 (variante intermedia, ej. abandono parcial del veto): buildFallbackPool debe ser NULO, mismo tratamiento que n=3", () => {
+    assert.strictEqual(buildFallbackPool(5), null, "buildFallbackPool(5) debe ser null, igual que buildFallbackPool(3)");
+  });
+
+  check("n=6 (variante intermedia): buildFallbackPool debe ser NULO, mismo tratamiento que n=3 — el caso citado explícitamente en el hallazgo 11/Grupo 1 (6 bandas mal contadas de un caso realmente-7 no debe recibir un nombre posicional inventado)", () => {
+    assert.strictEqual(buildFallbackPool(6), null, "buildFallbackPool(6) debe ser null, igual que buildFallbackPool(3)");
+  });
+
+  check("buildFallbackPool: 3, 4, 5 y 6 son indistinguibles entre sí en su tratamiento (todos null) — verifica que ninguno reciba accidentalmente un pool no-nulo distinto de los demás", () => {
+    const results = [3, 4, 5, 6].map((n) => buildFallbackPool(n));
+    assert.ok(results.every((r) => r === null), `se esperaba null para 3,4,5,6 — se obtuvo: ${JSON.stringify(results)}`);
+  });
+
+  check("buildFallbackPool: el tratamiento null de 3-6 es distinto del fallback conservador de '>8' (ej. n=9 sí debe devolver STANDARD_ORDER, no null)", () => {
+    const pool9 = buildFallbackPool(9);
+    assert.notStrictEqual(pool9, null, "buildFallbackPool(9) no debe ser null — '>8' usa el fallback conservador STANDARD_ORDER, un tratamiento deliberadamente distinto de 3-6");
+    assert.deepStrictEqual(pool9, STANDARD_ORDER, "buildFallbackPool(9) debe devolver STANDARD_ORDER como fallback conservador");
+  });
 } catch (err) {
   console.log("SKIP verificación cruzada con parser.js — no se pudo requerir (" + err.message + ")");
+}
+
+// ------------------------------------------------------------
+// Grupo 1 #1 de la Guía de seguimiento y resolución de errores —
+// "No existe un rechazo explícito de conteos imposibles".
+//
+// Cubre isPlausibleMapCount (parser.js, fuente de verdad compartida
+// sobre qué conteos de fila son geométricamente posibles dado el pool
+// real de FACEIT esta temporada: 3 a 8) y flagImplausibleBandCount
+// (app.js, la función que consulta esa fuente de verdad para decidir
+// si una captura debe llevar el warning explícito
+// "band_count_implausible", distinto del que ya reciben 4/5/6 —
+// posibles pero sin fallback posicional — o el caso de 0 filas, que
+// tiene su propio mensaje dedicado y no debe duplicarse).
+// ------------------------------------------------------------
+console.log("\n--- isPlausibleMapCount / flagImplausibleBandCount (Grupo 1 #1) ---");
+
+try {
+  const { isPlausibleMapCount, MIN_PLAUSIBLE_MAP_COUNT, MAX_PLAUSIBLE_MAP_COUNT } = require("./parser.js");
+
+  check("MIN_PLAUSIBLE_MAP_COUNT es 3 y MAX_PLAUSIBLE_MAP_COUNT es 8 (rango real del pool de veto de FACEIT esta temporada)", () => {
+    assert.strictEqual(MIN_PLAUSIBLE_MAP_COUNT, 3);
+    assert.strictEqual(MAX_PLAUSIBLE_MAP_COUNT, 8);
+  });
+
+  check("isPlausibleMapCount: acepta exactamente 3 a 8 inclusive", () => {
+    for (let n = 3; n <= 8; n++) {
+      assert.strictEqual(isPlausibleMapCount(n), true, `isPlausibleMapCount(${n}) debería ser true`);
+    }
+  });
+
+  check("isPlausibleMapCount: rechaza 0, 1, 2 (por debajo del mínimo real de 3 — Premium doble baneo)", () => {
+    assert.strictEqual(isPlausibleMapCount(0), false);
+    assert.strictEqual(isPlausibleMapCount(1), false);
+    assert.strictEqual(isPlausibleMapCount(2), false);
+  });
+
+  check("isPlausibleMapCount: rechaza 9, 10, 12 (por encima del máximo real de 8 — pool + Vertigo)", () => {
+    assert.strictEqual(isPlausibleMapCount(9), false);
+    assert.strictEqual(isPlausibleMapCount(10), false);
+    assert.strictEqual(isPlausibleMapCount(12), false, "12 bandas es geométricamente imposible dado el pool real — caso citado explícitamente en el hallazgo del Grupo 1 #1");
+  });
+
+  check("isPlausibleMapCount: rechaza valores no finitos o negativos sin lanzar excepción", () => {
+    assert.strictEqual(isPlausibleMapCount(-1), false);
+    assert.strictEqual(isPlausibleMapCount(NaN), false);
+    assert.strictEqual(isPlausibleMapCount(Infinity), false);
+  });
+
+  if (typeof flagImplausibleBandCount === "function") {
+    check("flagImplausibleBandCount: false para 0 bandas (tiene su propio mensaje dedicado, no se duplica el warning)", () => {
+      assert.strictEqual(flagImplausibleBandCount(0), false);
+    });
+
+    check("flagImplausibleBandCount: false para conteos plausibles (3, 4, 5, 6, 7, 8)", () => {
+      for (const n of [3, 4, 5, 6, 7, 8]) {
+        assert.strictEqual(flagImplausibleBandCount(n), false, `flagImplausibleBandCount(${n}) debería ser false`);
+      }
+    });
+
+    check("flagImplausibleBandCount: true para conteos geométricamente imposibles (9, 12)", () => {
+      assert.strictEqual(flagImplausibleBandCount(9), true);
+      assert.strictEqual(flagImplausibleBandCount(12), true, "12 bandas debe marcarse como implausible — caso del hallazgo original");
+    });
+  } else {
+    console.log("SKIP flagImplausibleBandCount — no se pudo extraer de app.js (¿se renombró la función?)");
+  }
+} catch (err) {
+  console.log("SKIP tests de isPlausibleMapCount/flagImplausibleBandCount — " + err.message);
 }
 
 console.log(`\n${failures === 0 ? "✔ Todos los tests pasaron." : `✘ ${failures} test(s) fallaron.`}`);

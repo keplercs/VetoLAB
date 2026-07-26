@@ -53,6 +53,56 @@ const STANDARD_ORDER = ["Dust2", "Mirage", "Nuke", "Ancient", "Inferno", "Anubis
 // aunque el veto tenga 8 filas.
 const SEASONAL_OPTIONAL_MAPS = ["Vertigo"];
 
+// ------------------------------------------------------------
+// Grupo 1 #1 de la Guía de seguimiento y resolución de errores —
+// "No existe un rechazo explícito de conteos imposibles".
+//
+// POR QUÉ ESTO EXISTE COMO FUENTE DE VERDAD COMPARTIDA: antes de este
+// fix, tanto `buildFallbackPool` (aquí abajo) como `looksLikeMapGrid`
+// (app.js, RELIABLE_BAND_COUNTS = new Set([3,7,8])) codificaban CADA
+// UNO su propia noción parcial de "conteo razonable", de forma
+// inconsistente entre sí, pero NINGUNO de los dos rechazaba
+// explícitamente un conteo que el juego real no puede producir (ej.
+// 12 bandas detectadas). Ese conteo caía silenciosamente por el mismo
+// camino que un 4/5/6 legítimo — sin ninguna señal de que, a
+// diferencia de 4/5/6 (posibles pero infrecuentes), 12 es
+// geométricamente IMPOSIBLE dado el pool de mapas de la temporada.
+//
+// RANGO: el veto real de FACEIT solo puede sobrevivir/mostrar entre 3
+// filas (mínimo del escenario Premium de doble baneo simultáneo) y 8
+// filas (máximo: pool estándar de 7 + el mapa opcional de voto
+// popular, Vertigo — ver SEASONAL_OPTIONAL_MAPS). No existe ningún
+// escenario documentado de FACEIT esta temporada donde el veto
+// muestre menos de 3 o más de 8 filas de mapa simultáneamente.
+// ------------------------------------------------------------
+const MIN_PLAUSIBLE_MAP_COUNT = 3;
+const MAX_PLAUSIBLE_MAP_COUNT = 8;
+
+/**
+ * Determina si un conteo de filas/bandas detectadas es geométricamente
+ * plausible dado el pool real de mapas de FACEIT esta temporada (3 a 8
+ * filas — ver constantes arriba). Devuelve `false` para cualquier valor
+ * fuera de ese rango, incluyendo 0 (ninguna fila detectada), negativos,
+ * o valores no finitos.
+ *
+ * IMPORTANTE — esto responde una pregunta DISTINTA de "¿existe un orden
+ * posicional confiable para este conteo?" (esa es `buildFallbackPool`,
+ * que devuelve `null` para 3-6 aunque esos conteos SÍ sean plausibles).
+ * `isPlausibleMapCount` solo responde "¿este número de filas podría
+ * corresponder a una captura real del veto, o es una señal de que la
+ * detección de bandas/OCR falló por completo (recorte incorrecto,
+ * imagen equivocada, ruido masivo)?". Un conteo puede ser plausible
+ * (ej. 5) y aun así no tener fallback posicional (`null`), y un conteo
+ * puede ser implausible (ej. 12) sin que eso tenga relación alguna con
+ * si existe o no fallback posicional para ese número.
+ *
+ * @param {number} n - cantidad de filas/bandas detectadas
+ * @returns {boolean}
+ */
+function isPlausibleMapCount(n) {
+  return Number.isFinite(n) && n >= MIN_PLAUSIBLE_MAP_COUNT && n <= MAX_PLAUSIBLE_MAP_COUNT;
+}
+
 // Etiqueta de nombre por defecto cuando ni el OCR ni el fallback
 // posicional lograron identificar el mapa de una fila. Se centraliza
 // aquí (en vez de repetir el literal en cada sitio de assignMapNames)
@@ -86,14 +136,49 @@ const UNIDENTIFIED_MAP_LABEL = "Mapa sin identificar";
  * sobrevivió el veto) — más peligroso que no tener nombre, porque no
  * se distingue visualmente de un acierto real salvo por el badge ⚠.
  *
+ * NOTA sobre `rowCount` fuera del rango plausible (< 3 u > 8, ver
+ * `isPlausibleMapCount` arriba): esta función NO valida eso — sigue
+ * devolviendo su fallback conservador (`STANDARD_ORDER`) para cualquier
+ * `rowCount > 8`, igual que antes de este fix. La responsabilidad de
+ * RECHAZAR un conteo geométricamente imposible (y mostrar un warning
+ * distinto de "revisar recorte") vive en la capa que detecta las bandas
+ * (`app.js`, vía `isPlausibleMapCount`), no aquí — `buildFallbackPool`
+ * solo decide qué pool de NOMBRES ofrecer una vez que ya se decidió
+ * seguir adelante con ese conteo. Mantener ambas responsabilidades
+ * separadas evita que un mismo conteo (ej. 12) deba rechazarse dos
+ * veces con lógicas potencialmente divergentes.
+ *
  * @param {number} rowCount - filas detectadas en esta captura.
  * @returns {string[]|null} pool ordenado de candidatos, o null si no
- *   existe un orden posicional confiable para ese tamaño (caso 3-6).
+ *   existe un orden posicional confiable para ese tamaño.
+ *
+ * NOTA (Grupo 1 #2 de la Guía de seguimiento y resolución de errores):
+ * `rowCount < 7` devuelve `null` para CUALQUIER valor entre
+ * `MIN_PLAUSIBLE_MAP_COUNT` (3) y 6 inclusive — no solo para el caso 3
+ * (FACEIT Premium, doble baneo simultáneo, el único documentado en
+ * detalle en el resto de este comentario y en los tests históricos).
+ * Los conteos 4, 5 y 6 son igual de plausibles que 3 según
+ * `isPlausibleMapCount` (todos están dentro del rango real del pool
+ * de veto de esta temporada) y representan variantes intermedias
+ * igual de reales: doble baneo asimétrico, abandono parcial del veto,
+ * u otras combinaciones donde sobreviven más de 3 pero menos de 7
+ * mapas. La razón para devolver `null` es EXACTAMENTE la misma en los
+ * cuatro casos (3, 4, 5 y 6): no existe un orden posicional único que
+ * `STANDARD_ORDER` (pensado para exactamente 7 mapas en un orden fijo)
+ * pueda mapear de forma confiable a un subconjunto arbitrario de
+ * tamaño variable — qué mapas sobrevivieron y en qué orden depende de
+ * qué baneó cada equipo, no de una posición fija en el pool completo.
+ * Tratar 4/5/6 con una lógica distinta de 3 (por ejemplo, intentando
+ * igual un fallback posicional parcial) reintroducría el mismo riesgo
+ * que este `null` existe para evitar: una etiqueta con apariencia de
+ * certeza que en realidad no tiene respaldo posicional real. Ver
+ * `app_regression_test.js` para los casos de test que verifican este
+ * mismo tratamiento uniforme sobre 3, 4, 5 y 6.
  */
 function buildFallbackPool(rowCount) {
   if (rowCount === 7) return STANDARD_ORDER;
   if (rowCount === 8) return [...STANDARD_ORDER, ...SEASONAL_OPTIONAL_MAPS];
-  if (rowCount < 7) return null; // ambiguo: sin orden posicional confiable (Premium, doble baneo)
+  if (rowCount < 7) return null; // ambiguo: sin orden posicional confiable (3, 4, 5 o 6 — doble baneo/abandono parcial del veto, ver nota arriba)
   return STANDARD_ORDER; // tamaño inesperado (>8): fallback conservador, ya queda marcado ⚠ igual
 }
 
@@ -441,8 +526,23 @@ function validateRows(rows) {
     if (r.lowConfidence) warnings.push({ code: "low_confidence_separator" });
     if (r.ocrFailed) warnings.push({ code: "ocr_failed" });
     if (r.nameGuessed) {
+      // Grupo 7 de la Guía de seguimiento y resolución de errores:
+      // cuando el nombre no vino del OCR de texto pero SÍ se corroboró
+      // por el ícono del mapa (`iconMatched`, ver `identifyMapByIcon`
+      // en iconMatch.js / `runPerRowOCR` en app.js), es una calidad de
+      // evidencia distinta y mejor que un fallback posicional ciego —
+      // hay una comparación visual real detrás, no solo "el N-ésimo
+      // mapa del pool". Se le da su propio código de warning
+      // (`name_guessed_icon_match`), con menor severidad implícita que
+      // `name_guessed_no_pool`/`name_guessed_positional` (la traducción
+      // en i18n.js lo redacta como corroboración, no como suposición),
+      // y esta rama tiene PRIORIDAD sobre las otras dos: si el ícono
+      // corroboró, no tiene sentido además decir "asignado por
+      // posición", que ya no es lo que ocurrió.
       warnings.push({
-        code: r.noPoolFallback ? "name_guessed_no_pool" : "name_guessed_positional",
+        code: r.iconMatched
+          ? "name_guessed_icon_match"
+          : (r.noPoolFallback ? "name_guessed_no_pool" : "name_guessed_positional"),
       });
     }
     // Punto 3 de la Matriz de priorización (Hallazgo 2.2.1): dos filas
@@ -463,5 +563,6 @@ if (typeof module !== "undefined") {
     parseMapRows, validateRows, normalizeMapName, MAP_POOL,
     STANDARD_ORDER, SEASONAL_OPTIONAL_MAPS, buildFallbackPool,
     parseRowNumbers, findMapNameInRow, UNIDENTIFIED_MAP_LABEL,
+    isPlausibleMapCount, MIN_PLAUSIBLE_MAP_COUNT, MAX_PLAUSIBLE_MAP_COUNT,
   };
 }
