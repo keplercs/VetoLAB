@@ -327,6 +327,37 @@ Matches: 421
 ??? (57%) 17 © 28 (47%)
 `.trim(),
   },
+  {
+    id: "veto_09_estrella_izquierda",
+    label: "ícono de ranking (★) pegado a la izquierda del nombre — bug reportado 26/07/2026 (Mirage/Ancient no reconocidos)",
+    kind: "whole-image",
+    // Reproduce el bug real reportado sobre una captura de TAPIT.GG: a
+    // diferencia de Dust2/Cache (ícono de ranking a la DERECHA del
+    // texto, sin interferir con el nombre), en Mirage y Ancient el
+    // ícono de ranking queda pegado al lado IZQUIERDO del nombre y
+    // Tesseract lo transcribe como ruido que se INTERCALA dentro de
+    // las letras ("Mir*age") o incluso REEMPLAZA una letra por un
+    // glifo visualmente similar ("An¢ient", "¢" en vez de "c") — a
+    // diferencia del caso ya cubierto de ruido ANTES/DESPUÉS del
+    // nombre completo (ej. "*&Mirage" en fixtures anteriores, que sí
+    // matcheaba con el patrón previo a este fix). minMaps=5 porque
+    // esta fixture solo tiene 5 filas (2 mapas ya no aparecen en el
+    // pool activo de esta captura real — ver comentario de
+    // MAP_NAME_PATTERN en parser.js sobre por qué eso NO es relevante
+    // para este fixture en particular, que solo prueba reconocimiento
+    // de nombre, no conteo de pool).
+    minMaps: 5,
+    rawText: `
+team_TXXX is banning a map
+00:23
+
+Dust2 (54%) 48 © 41 (66%)
+Mir*age (59%) 61 © 63 (48%)
+Cache (78%) 9 © 11 (36%)
+An¢ient (25%) 12 © 18 (72%)
+Inferno (60%) 5 © 2 (100%)
+`.trim(),
+  },
 ];
 
 if (typeof module !== "undefined") {

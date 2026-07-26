@@ -203,8 +203,83 @@ function normalizeMapName(raw) {
   return null;
 }
 
+// ------------------------------------------------------------
+// Bug reportado: "no se detecta Mirage/Ancient" en capturas reales de
+// TAPIT.GG donde el ícono de ranking (★ dorada/gris/ámbar/roja — ver
+// Sección 0.2 del documento de fundamentos: exactamente 1 estrella por
+// cada extremo del ranking de 7 mapas de cada equipo, obligatoria
+// salvo el caso Premium de 3 mapas) aparece pegado al lado IZQUIERDO
+// del nombre del mapa, en vez de al lado derecho (como en Dust2/Cache,
+// donde el patrón anterior sí funcionaba sin problema).
+//
+// CAUSA RAÍZ: cuando el ícono se solapa visualmente con el nombre,
+// Tesseract no siempre inserta un carácter de ruido ADYACENTE al
+// nombre completo (caso ya tolerado por MAP_NAME_PATTERN sin cambios,
+// ej. "*&Mirage" -> matchea "Mirage" igual) — a veces el ruido cae
+// INTERCALADO entre letras del propio nombre ("Mir*age") o incluso
+// REEMPLAZA una letra por un glifo visualmente similar ("An¢ient",
+// donde "¢" sustituye a la "c"). Ninguno de los dos casos matcheaba
+// contra el patrón anterior, que exigía las letras del nombre
+// perfectamente contiguas.
+//
+// FIX EN DOS PARTES (verificado explícitamente contra el fixture 05,
+// la prueba de especificidad más estricta del proyecto — 0 falsos
+// positivos nuevos sobre el panel de stats extendido, ver
+// parser_regression_test.js):
+//
+//   1. `deconfuseMapText`: sustituye glifos visualmente confundibles
+//      con una letra específica (¢/©->c, °->o, ¡->i, @->a, €->e, $->s)
+//      ANTES de aplicar el patrón — cubre el caso "letra reemplazada".
+//      Se aplica sobre una copia del texto SOLO para la búsqueda de
+//      nombre; nunca se usa el texto deconfundido para nada más (no
+//      afecta el parseo numérico ni ningún otro campo).
+//   2. `MAP_NAME_PATTERN` ahora permite hasta 2 caracteres no
+//      alfanuméricos intercalados ENTRE cada letra del nombre esperado
+//      — cubre el caso "letra rodeada de ruido sin ser reemplazada".
+//      El límite de 2 (no ilimitado) evita relajar tanto el patrón que
+//      empiece a matchear texto no relacionado con separaciones de
+//      basura muy largas — mismo criterio de "tolerancia acotada, no
+//      total" que ya usa ROW_PATTERN para el separador entre conteos.
+// ------------------------------------------------------------
+
+const MAP_NAME_CONFUSABLES = {
+  "¢": "c", "©": "c", "°": "o", "¡": "i", "@": "a", "€": "e", "$": "s",
+};
+
+/**
+ * Sustituye glifos individuales conocidos por la letra que Tesseract
+ * más probablemente confundió con ese símbolo, SOLO para efectos de
+ * búsqueda del nombre de mapa (ver `MAP_NAME_PATTERN` más abajo). No
+ * se usa para nada más — nunca reemplaza el texto real de la fila que
+ * consume `parseRowNumbers`/`ROW_PATTERN`.
+ */
+function deconfuseMapText(text) {
+  let out = "";
+  for (const ch of text) out += MAP_NAME_CONFUSABLES[ch] ?? ch;
+  return out;
+}
+
+// Construye, para una palabra dada, un patrón que permite hasta 2
+// caracteres no alfanuméricos intercalados ENTRE cada letra — ej. para
+// "Cache" -> "C[^A-Za-z0-9]{0,2}a[^A-Za-z0-9]{0,2}c[^A-Za-z0-9]{0,2}..."
+const NAME_NOISE_GAP = "[^A-Za-z0-9]{0,2}";
+function withNoiseGaps(word) {
+  return word.split("").join(NAME_NOISE_GAP);
+}
+
 const MAP_NAME_PATTERN = new RegExp(
-  "(Dust\\s*2|Mirage|Nuke|Ancient|Inferno|Anubis|Cache|Vertigo|Overpass|Train)",
+  "(" + [
+    withNoiseGaps("Dust") + NAME_NOISE_GAP + "\\s*2",
+    withNoiseGaps("Mirage"),
+    withNoiseGaps("Nuke"),
+    withNoiseGaps("Ancient"),
+    withNoiseGaps("Inferno"),
+    withNoiseGaps("Anubis"),
+    withNoiseGaps("Cache"),
+    withNoiseGaps("Vertigo"),
+    withNoiseGaps("Overpass"),
+    withNoiseGaps("Train"),
+  ].join("|") + ")",
   "gi"
 );
 
@@ -343,7 +418,7 @@ function assignMapNames(rows, fullText) {
     const prevEnd = i > 0 ? sorted[i - 1].end : 0;
     const label = fullText.slice(prevEnd, row.start);
 
-    const nameMatch = [...label.matchAll(MAP_NAME_PATTERN)].pop(); // el más cercano a la fila
+    const nameMatch = [...deconfuseMapText(label).matchAll(MAP_NAME_PATTERN)].pop(); // el más cercano a la fila
     let mapName = nameMatch ? normalizeMapName(nameMatch[0]) : null;
     let nameGuessed = false;
     // Punto 5 de la Matriz de priorización: flag explícito en vez de
@@ -494,7 +569,7 @@ function parseRowNumbers(rowText) {
  * al menos un dígito ilegible en medio de la lista).
  */
 function findMapNameInRow(rowText) {
-  const match = [...rowText.matchAll(MAP_NAME_PATTERN)][0];
+  const match = [...deconfuseMapText(rowText).matchAll(MAP_NAME_PATTERN)][0];
   return match ? normalizeMapName(match[0]) : null;
 }
 
@@ -564,5 +639,6 @@ if (typeof module !== "undefined") {
     STANDARD_ORDER, SEASONAL_OPTIONAL_MAPS, buildFallbackPool,
     parseRowNumbers, findMapNameInRow, UNIDENTIFIED_MAP_LABEL,
     isPlausibleMapCount, MIN_PLAUSIBLE_MAP_COUNT, MAX_PLAUSIBLE_MAP_COUNT,
+    deconfuseMapText, MAP_NAME_CONFUSABLES,
   };
 }

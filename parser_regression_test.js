@@ -35,6 +35,7 @@ const {
   parseRowNumbers,
   findMapNameInRow,
   STANDARD_ORDER,
+  deconfuseMapText,
 } = require("../parser.js");
 const { FIXTURES } = require("./fixtures.js");
 
@@ -254,6 +255,90 @@ if (parserModule && typeof parserModule.buildFallbackPool === "function") {
     "(fix pendiente, ver conversación de depuración). Este bloque no cuenta como" +
     " fallo hasta que el fix se implemente y este skip deba convertirse en test real."
   );
+}
+
+// ------------------------------------------------------------
+// Test del bug real reportado el 26/07/2026: "no se reconoce
+// Mirage/Ancient" en una captura real de TAPIT.GG.
+//
+// CAUSA RAÍZ (distinta de los bugs anteriores de este archivo): NO es
+// un problema de separador entre conteos ni de dígitos ilegibles — es
+// el ícono de RANKING (★ dorada/gris/ámbar/roja, obligatorio por mapa
+// bajo el sistema descrito en la Sección 0.2 del documento de
+// fundamentos: exactamente 1 estrella por cada extremo del ranking de
+// 7 mapas por equipo) que, cuando queda pegado al lado IZQUIERDO del
+// nombre en vez de al derecho, hace que Tesseract inserte ruido DENTRO
+// de las letras del nombre ("Mir*age") o reemplace una letra por un
+// glifo visualmente similar ("An¢ient", "¢" por "c") — a diferencia
+// del caso ya cubierto de ruido antes/después del nombre COMPLETO.
+//
+// Ver `deconfuseMapText` + `MAP_NAME_PATTERN` (tolerancia a ruido
+// intercalado) en parser.js para el fix.
+// ------------------------------------------------------------
+console.log("\n=== Test del bug real: ícono de ranking a la izquierda del nombre (Mirage/Ancient) ===\n");
+
+const fx09 = FIXTURES.find((f) => f.id === "veto_09_estrella_izquierda");
+if (fx09) {
+  try {
+    const rows = validateRows(parseMapRows(fx09.rawText));
+    const names = rows.map((r) => r.map);
+    assert.ok(names.includes("Mirage"), `Mirage debía reconocerse pese al ruido intercalado ("Mir*age"); nombres obtenidos: ${names.join(", ")}`);
+    assert.ok(names.includes("Ancient"), `Ancient debía reconocerse pese a la letra reemplazada ("An¢ient"); nombres obtenidos: ${names.join(", ")}`);
+    assert.ok(names.includes("Dust2"), "Dust2 (caso limpio, sin ruido) debe seguir reconociéndose sin cambios");
+    assert.ok(names.includes("Cache"), "Cache (caso limpio, sin ruido) debe seguir reconociéndose sin cambios");
+    assert.ok(names.includes("Inferno"), "Inferno (caso limpio, sin ruido) debe seguir reconociéndose sin cambios");
+    // Ninguna de las 5 filas debe caer a nameGuessed (fallback posicional
+    // o "Mapa sin identificar") — las 5 tienen nombre reconocible en el
+    // propio texto, aunque con ruido.
+    const guessedCount = rows.filter((r) => r.nameGuessed).length;
+    assert.strictEqual(guessedCount, 0, `ninguna fila debía caer a nameGuessed; ${guessedCount} filas sí lo hicieron`);
+    console.log(`OK   ${fx09.id} — Mirage y Ancient reconocidos pese al ruido intercalado del ícono de ranking, 0 filas con nombre adivinado`);
+  } catch (err) {
+    failures++;
+    console.error(`FAIL ${fx09.id} — ${err.message}`);
+  }
+} else {
+  failures++;
+  console.error("FAIL veto_09_estrella_izquierda — fixture no encontrada en fixtures.js");
+}
+
+console.log("\n--- deconfuseMapText: casos unitarios ---");
+
+const deconfuseCases = [
+  { input: "An¢ient", expectedContains: "Ancient", label: "¢ reemplaza a c" },
+  { input: "Nu°e", expectedContains: "Nuoe", label: "° reemplaza a o (prueba unitaria del mapeo, no el caso real reportado)" },
+  { input: "Mirage", expectedContains: "Mirage", label: "texto limpio no debe alterarse" },
+  { input: "team_100fe is banning a map", expectedContains: "team_100fe is banning a map", label: "texto sin confusables no debe alterarse" },
+];
+
+for (const { input, expectedContains, label } of deconfuseCases) {
+  try {
+    const out = deconfuseMapText(input);
+    assert.strictEqual(out, expectedContains, `deconfuseMapText("${input}") = "${out}", esperado "${expectedContains}"`);
+    console.log(`OK   deconfuseMapText("${input}") -> "${out}" — ${label}`);
+  } catch (err) {
+    failures++;
+    console.error(`FAIL deconfuseMapText — ${err.message}`);
+  }
+}
+
+console.log("\n--- MAP_NAME_PATTERN: tolerancia a ruido intercalado NO debe generar falsos positivos (re-verificación del fixture 05) ---");
+
+try {
+  // Re-confirma explícitamente que el fix de tolerancia a ruido no
+  // reabrió la vulnerabilidad de especificidad que veto_05_statspanel
+  // existe para prevenir — el conteo EXACTO (no >=) debe seguir siendo
+  // 6, igual que antes de este fix.
+  const fx05 = FIXTURES.find((f) => f.id === "veto_05_statspanel");
+  const rows05 = validateRows(parseMapRows(fx05.rawText));
+  assert.strictEqual(
+    rows05.length, 6,
+    `veto_05_statspanel debía seguir dando EXACTAMENTE 6 filas tras el fix de tolerancia a ruido intercalado; se obtuvieron ${rows05.length} — la tolerancia a ruido pudo haber empezado a matchear contra el panel de stats`
+  );
+  console.log("OK   veto_05_statspanel sigue dando exactamente 6 filas tras agregar tolerancia a ruido intercalado — sin nuevos falsos positivos");
+} catch (err) {
+  failures++;
+  console.error(`FAIL re-verificación fixture 05 — ${err.message}`);
 }
 
 console.log(`\n${failures === 0 ? "✔ Todos los tests pasaron." : `✘ ${failures} test(s) fallaron.`}`);
