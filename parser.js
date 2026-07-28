@@ -242,9 +242,22 @@ function normalizeMapName(raw) {
 //      total" que ya usa ROW_PATTERN para el separador entre conteos.
 // ------------------------------------------------------------
 
-const MAP_NAME_CONFUSABLES = {
-  "¢": "c", "©": "c", "°": "o", "¡": "i", "@": "a", "€": "e", "$": "s",
-};
+// ------------------------------------------------------------
+// Grupo 9 #1 de la Guía de seguimiento y resolución de errores —
+// "Externalizar constantes de OCR frágiles a un lugar único,
+// versionable" (VetoLAB_TAPIT_Analisis_Tecnico.md, Sección 12.6). Ver
+// ocrConstants.js para la justificación numérica completa de cada
+// valor y para el detalle del patrón Node/navegador usado aquí — en
+// resumen: en Node se importa explícitamente; en el navegador,
+// ocrConstants.js ya se cargó como <script> anterior (ver index.html)
+// y sus `const` de nivel superior ya están en este mismo scope global
+// de scripts clásicos, así que el objeto de abajo solo LEE esos
+// nombres ya existentes en vez de volver a declararlos (declarar de
+// nuevo el mismo identificador con var/let/const sería un SyntaxError
+// de redeclaración contra el const ya presente en el scope compartido).
+const PARSER_OCR_CONST = (typeof module !== "undefined")
+  ? require("./ocrConstants.js")
+  : { N_UNUSUALLY_HIGH_THRESHOLD, MAP_NAME_CONFUSABLES }; // lectura de los const globales ya cargados
 
 /**
  * Sustituye glifos individuales conocidos por la letra que Tesseract
@@ -255,7 +268,7 @@ const MAP_NAME_CONFUSABLES = {
  */
 function deconfuseMapText(text) {
   let out = "";
-  for (const ch of text) out += MAP_NAME_CONFUSABLES[ch] ?? ch;
+  for (const ch of text) out += PARSER_OCR_CONST.MAP_NAME_CONFUSABLES[ch] ?? ch;
   return out;
 }
 
@@ -304,6 +317,21 @@ const MAP_NAME_PATTERN = new RegExp(
  * extremo) sin acoplarse a un glifo específico que el OCR no reproduce
  * de forma fiable.
  */
+// Grupo 8 #3 de la Guía de seguimiento y resolución de errores —
+// CONFIRMACIÓN (no cambio de lógica) vía ingeniería inversa directa
+// del bundle de TAPIT.GG (VetoLAB_TAPIT_Analisis_Tecnico.md, Sección
+// 11.2): el separador entre nA y nB NUNCA fue un carácter de texto en
+// el origen — es literalmente `<span className="w-1 h-1 bg-white
+// rounded-full">` (un círculo CSS de 4x4px), no un glifo "•" ni
+// ningún otro símbolo. Esto confirma de forma definitiva que la
+// estrategia ya implementada aquí (aceptar cualquier fragmento corto
+// de 1-5 caracteres no-dígito, en vez de una lista fija de símbolos
+// conocidos) es la única conceptualmente correcta: no existe ningún
+// glifo "verdadero" que buscar, porque la fuente de verdad nunca fue
+// texto. Un futuro mantenedor NO debe reintentar "arreglar" esto con
+// una lista de símbolos más completa — el problema no es una lista
+// incompleta, es que la pregunta en sí ("¿qué carácter usa TAPIT?")
+// no tiene respuesta.
 const ROW_PATTERN = /\((\d{1,3})\s*%\)[^\d(]{0,6}(\d{1,3})[^\d(]{1,5}(\d{1,3})[^\d(]{0,6}\((\d{1,3})\s*%\)/g;
 
 /**
@@ -380,6 +408,82 @@ const ROW_PATTERN_NO_OPEN_PAREN = /(\d{1,3})\s*%\)[^\d(]{0,6}(\d{1,3})[^\d(]{1,5
 function extractRowsRescue(text, alreadyFoundRanges) {
   const found = [];
   for (const m of text.matchAll(ROW_PATTERN_NO_OPEN_PAREN)) {
+    const overlaps = alreadyFoundRanges.some(
+      (r) => m.index < r.end && m.index + m[0].length > r.start
+    );
+    if (overlaps) continue;
+    found.push({
+      pA: parseInt(m[1], 10),
+      nA: parseInt(m[2], 10),
+      nB: parseInt(m[3], 10),
+      pB: parseInt(m[4], 10),
+      start: m.index,
+      end: m.index + m[0].length,
+      raw: m[0],
+      lowConfidence: true,
+    });
+  }
+  return found;
+}
+
+// Grupo 3 #3.3.1 (rescate de un solo dígito, ver bloque extendido más
+// abajo tras extractRowsSingleDigitRescue) — declarado aquí, cerca de
+// los otros ROW_PATTERN_*, para mantener agrupadas todas las
+// constantes de patrón de la cadena de rescate en el mismo orden en
+// que se aplican.
+
+
+// ------------------------------------------------------------
+// Grupo 3 #3.3.1 de la Guía de seguimiento y resolución de errores —
+// "Inferno mal ordenado en Mapas" (falso — bug real de fila de UN
+// SOLO dígito por lado, no de ranking). Bug reportado: la fila real
+// de Inferno era "(100%) 1 • 2 (50%)" — el separador (renderizado por
+// TAPIT como un <span> circular CSS de 4x4px, NUNCA como carácter de
+// texto, ver comentario de ROW_PATTERN arriba) se perdió por completo
+// en el OCR de esa fila puntual, colapsando "1" + "2" en el token
+// fusionado "12". Ninguno de los tres patrones anteriores lo
+// distinguía de un conteo real de 12 partidas:
+//   - ROW_PATTERN exige 1-5 caracteres no-dígito entre nA y nB — "12"
+//     no tiene ningún carácter entre los dígitos, así que no matchea
+//     como fila de 2 números (matchea como un solo n=12, igual que
+//     ROW_PATTERN_NO_SEP intenta evitar en el caso de 12•7 -> 127).
+//   - ROW_PATTERN_NO_SEP exige "\s+" (al menos un espacio) entre los
+//     dos números — en este caso no queda ningún espacio.
+//   - ROW_PATTERN_NO_OPEN_PAREN hereda la misma exigencia de 1-5
+//     caracteres no-dígito de ROW_PATTERN, así que tampoco lo cubre.
+//
+// El resultado real observado (Inferno apareciendo PRIMERO en la
+// lista de picks, no desaparecido) confirma que `nums` no fue `null`
+// — algún patrón sí matcheó, probablemente absorbiendo dígitos de la
+// fila vecina (Ancient, con conteos de 2 dígitos) dentro del bloque
+// fusionado, produciendo un `n` corrupto e inflado que disparó un
+// deltaAdj artificialmente alto.
+//
+// FIX: patrón de rescate MÁS ESTRICTO que los tres anteriores, no más
+// laxo — exige EXACTAMENTE 1 dígito a cada lado del bloque fusionado
+// (`(\d)(\d)`, no `(\d{1,3})(\d{1,3})`), precisamente porque "12"
+// fusionado sin separador es genuinamente ambiguo SOLO cuando ambos
+// conteos son de un solo dígito (1-9): en ese caso específico, un
+// bloque de exactamente 2 dígitos consecutivos puede interpretarse de
+// forma no ambigua como "1 dígito de nA + 1 dígito de nB" sin
+// arriesgar fusionar un nA o nB real de 2+ dígitos (ej. un "12" real
+// no se reinterpreta jamás como "1"+"2" bajo este patrón, porque ya
+// lo captura ROW_PATTERN/ROW_PATTERN_NO_SEP con éxito antes de llegar
+// aquí — este patrón es el ÚLTIMO recurso de la cadena, se ejecuta
+// solo sobre lo que los tres anteriores no reclamaron).
+// Se activa SOLO cuando los tres patrones anteriores ya fallaron
+// (mismo criterio de "capas de rescate en orden creciente de
+// permisividad" que ROW_PATTERN_NO_OPEN_PAREN), y SIEMPRE marca la
+// fila como lowConfidence: true — nunca se asume con la misma certeza
+// que un match con separador visible que sí distingue nA de nB. El
+// warning `low_confidence_separator` (ya existente, ver validateRows)
+// señala la fila para revisión manual en vez de decidir en silencio
+// cuál de las dos lecturas (1•2 vs. n=12) es la correcta.
+const ROW_PATTERN_SINGLE_DIGIT_AMBIGUOUS = /\((\d{1,3})\s*%\)[^\d(]{0,6}(\d)(\d)[^\d(]{0,6}\((\d{1,3})\s*%\)/g;
+
+function extractRowsSingleDigitRescue(text, alreadyFoundRanges) {
+  const found = [];
+  for (const m of text.matchAll(ROW_PATTERN_SINGLE_DIGIT_AMBIGUOUS)) {
     const overlaps = alreadyFoundRanges.some(
       (r) => m.index < r.end && m.index + m[0].length > r.start
     );
@@ -476,7 +580,14 @@ function parseMapRows(rawText) {
   const primary = extractRowsByPattern(text);
   const fallback = extractRowsFallback(text, primary);
   const rescued = extractRowsRescue(text, [...primary, ...fallback]);
-  const allRows = [...primary, ...fallback, ...rescued].sort((a, b) => a.start - b.start);
+  // Grupo 3 #3.3.1: cuarto y último nivel de rescate, solo para el
+  // caso específico de "ambos conteos son de un solo dígito y el
+  // separador se perdió por completo" (ver comentario extenso junto a
+  // ROW_PATTERN_SINGLE_DIGIT_AMBIGUOUS). Se ejecuta sobre lo que los
+  // tres niveles anteriores no reclamaron todavía, en el mismo
+  // criterio de permisividad creciente que ya sigue extractRowsRescue.
+  const singleDigitRescued = extractRowsSingleDigitRescue(text, [...primary, ...fallback, ...rescued]);
+  const allRows = [...primary, ...fallback, ...rescued, ...singleDigitRescued].sort((a, b) => a.start - b.start);
 
   if (allRows.length === 0) return [];
 
@@ -556,6 +667,32 @@ function parseRowNumbers(rowText) {
     };
   }
 
+  // Grupo 3 #3.3.1: último recurso, específico del bug real reportado
+  // ("Inferno mal ordenado en Mapas"). Cuando una fila aislada por
+  // banda trae AMBOS conteos de un solo dígito y el separador (nunca
+  // un carácter real, ver cabecera de ROW_PATTERN) se pierde por
+  // completo en el OCR, el texto colapsa a un bloque de exactamente 2
+  // dígitos consecutivos (ej. "1"+"2" -> "12"), indistinguible en el
+  // propio texto de un conteo real de 12 partidas. Ver el comentario
+  // extenso junto a ROW_PATTERN_SINGLE_DIGIT_AMBIGUOUS para el porqué
+  // este patrón es seguro (solo interpreta como "1 dígito + 1 dígito"
+  // un bloque de EXACTAMENTE 2 dígitos, nunca reinterpreta un conteo
+  // real de 2+ dígitos que ROW_PATTERN/ROW_PATTERN_NO_SEP ya habrían
+  // capturado arriba con éxito). Siempre lowConfidence: true — nunca
+  // se asume con la misma certeza que un match con separador visible.
+  ROW_PATTERN_SINGLE_DIGIT_AMBIGUOUS.lastIndex = 0;
+  const singleDigitMatch = ROW_PATTERN_SINGLE_DIGIT_AMBIGUOUS.exec(text);
+  ROW_PATTERN_SINGLE_DIGIT_AMBIGUOUS.lastIndex = 0;
+  if (singleDigitMatch) {
+    return {
+      pA: parseInt(singleDigitMatch[1], 10),
+      nA: parseInt(singleDigitMatch[2], 10),
+      nB: parseInt(singleDigitMatch[3], 10),
+      pB: parseInt(singleDigitMatch[4], 10),
+      lowConfidence: true,
+    };
+  }
+
   return null;
 }
 
@@ -597,7 +734,19 @@ function validateRows(rows) {
     if (r.pB > 100 || r.pB < 0) warnings.push({ code: "pb_out_of_range" });
     if (r.nA === 0 && r.pA > 0) warnings.push({ code: "na_zero_pa_positive" });
     if (r.nB === 0 && r.pB > 0) warnings.push({ code: "nb_zero_pb_positive" });
-    if (r.nA > 500 || r.nB > 500) warnings.push({ code: "n_unusually_high" });
+    // Grupo 8 #1 de la Guía de seguimiento y resolución de errores:
+    // el umbral bajó de 500 a 120 (ver ocrConstants.js) tras confirmar
+    // por ingeniería inversa del propio código de TAPIT.GG
+    // (VetoLAB_TAPIT_Analisis_Tecnico.md, Sección 11.5) que su ajuste
+    // `matches_limit` acota el historial POR JUGADOR a un máximo de
+    // 100 partidas totales — ningún conteo real por mapa debería
+    // acercarse siquiera a 500. Con 500, este warning era
+    // prácticamente inalcanzable incluso ante una fusión de dígitos
+    // real del OCR (ej. "12"+"7" leído como "127"), que es exactamente
+    // el caso que este warning existe para atrapar.
+    if (r.nA > PARSER_OCR_CONST.N_UNUSUALLY_HIGH_THRESHOLD || r.nB > PARSER_OCR_CONST.N_UNUSUALLY_HIGH_THRESHOLD) {
+      warnings.push({ code: "n_unusually_high" });
+    }
     if (r.lowConfidence) warnings.push({ code: "low_confidence_separator" });
     if (r.ocrFailed) warnings.push({ code: "ocr_failed" });
     if (r.nameGuessed) {
@@ -639,6 +788,6 @@ if (typeof module !== "undefined") {
     STANDARD_ORDER, SEASONAL_OPTIONAL_MAPS, buildFallbackPool,
     parseRowNumbers, findMapNameInRow, UNIDENTIFIED_MAP_LABEL,
     isPlausibleMapCount, MIN_PLAUSIBLE_MAP_COUNT, MAX_PLAUSIBLE_MAP_COUNT,
-    deconfuseMapText, MAP_NAME_CONFUSABLES,
+    deconfuseMapText, MAP_NAME_CONFUSABLES: PARSER_OCR_CONST.MAP_NAME_CONFUSABLES,
   };
 }

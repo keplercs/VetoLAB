@@ -2,6 +2,23 @@
 // App — orquesta OCR, parsing, modelo matemático y render.
 // ============================================================
 
+// Grupo 9 #1 de la Guía de seguimiento y resolución de errores —
+// "Externalizar constantes de OCR frágiles a un lugar único,
+// versionable" (VetoLAB_TAPIT_Analisis_Tecnico.md, Sección 12.6). Ver
+// ocrConstants.js para la justificación numérica completa. app.js es
+// un archivo exclusivamente de navegador (usa `document`/`els` desde
+// el primer render), pero se mantiene el mismo patrón defensivo que
+// parser.js/iconMatch.js por consistencia y por si en el futuro algún
+// fragmento de este archivo se extrae para test (como ya hace
+// app_regression_test.js con looksLikeMapGrid): en el navegador,
+// ocrConstants.js ya se cargó como <script> anterior (ver index.html)
+// y sus `const` de nivel superior ya están en este mismo scope global
+// — el objeto de abajo solo LEE esos nombres ya existentes, nunca los
+// vuelve a declarar (evita el SyntaxError de redeclaración).
+const APP_OCR_CONST = (typeof module !== "undefined")
+  ? require("./ocrConstants.js")
+  : { ICON_HUE_SUPPRESS_RANGES };
+
 let state = {
   maps: [], // {map, pA, nA, pB, nB, warnings, needsReview, sourceId, order}
   editingIndex: null,
@@ -419,6 +436,54 @@ const STATS_ZONE_X_END = 0.98;
 const ICON_ZONE_X_START = 0;
 const ICON_ZONE_X_END = 0.14;
 
+// ------------------------------------------------------------
+// Grupo 11 de la Guía de seguimiento y resolución de errores —
+// "corroboración de lado (propio/rival) vía color de texto de
+// comparación", versión CORREGIDA respecto al planteamiento original
+// del análisis técnico (§10: "validación cruzada del signo del
+// diferencial"). Verificado en dos pasos, no asumido:
+//
+//   1. Contra el bundle real de TAPIT.GG (content.js v1.16.6): el
+//      color de cada mitad de la franja de stats es
+//      `c>A ? "text-green-500" : c===A ? "text-gray-500" : "text-red-500"`
+//      para el lado propio, e inverso para el lado rival — donde `c`
+//      y `A` son los mismos winRate que ya lee el OCR de texto. Es
+//      decir: el color es una función DETERMINISTA de los mismos dos
+//      números que el OCR ya intenta leer, no una fuente de datos
+//      independiente. Por eso NO se implementa como validador del
+//      signo de `pA - pB` (correlacionaría con el mismo error de OCR
+//      que se buscaría detectar, dando falsa confianza) — ver
+//      discusión completa en la conversación de depuración de esta
+//      ronda.
+//   2. Contra una captura real de TAPIT.GG (medición de píxeles): el
+//      bloque de color de cada lado NO ocupa toda la franja de stats
+//      (STATS_ZONE_X_START=0.55 a 0.98), sino una sub-franja angosta
+//      y centrada — medido en 5 filas reales: lado propio en
+//      x≈0.38–0.49 del ancho total de fila, lado rival en
+//      x≈0.57–0.70. Verde real ≈ RGB(12,196,80) (Tailwind green-500
+//      #22c55e), rojo real ≈ RGB(250,43,45) (Tailwind red-500
+//      #ef4444) — ambos con muy poca desviación del valor Tailwind
+//      nominal, confirmando que sobreviven razonablemente bien a la
+//      compresión de una captura de pantalla típica.
+//
+// USO CORREGIDO: en vez de validar el signo de un delta ya calculado,
+// esta zona sirve para CORROBORAR qué lado del separador es el propio
+// y cuál el rival cuando el patrón numérico de una fila se lee pero
+// el layout resulta ambiguo (ver `sampleComparisonColorSide` más
+// abajo) — análogo en espíritu a `identifyMapByIcon` (Grupo 7): una
+// señal visual independiente del texto, usada solo como corroboración
+// cuando hace falta, nunca como fuente primaria ni como override de
+// un resultado numérico ya obtenido con confianza.
+const COMPARISON_COLOR_ZONE_OWN = { xStart: 0.36, xEnd: 0.51 };
+const COMPARISON_COLOR_ZONE_RIVAL = { xStart: 0.56, xEnd: 0.72 };
+// Umbral de dominancia de canal para clasificar un píxel como
+// verde/rojo "real" de Tailwind (no ruido de JPEG ni el dorado del
+// ícono de ranking, que en la captura medida se solapó en valores
+// como RGB(207,160,29) — alto R Y alto G a la vez, distinto del rojo
+// puro que exige R alto con G/B bajos, o del verde puro que exige G
+// alto con R/B bajos).
+const COMPARISON_COLOR_DOMINANCE = 45;
+
 function estimateBackgroundColor(imgData, width, height, xStart, xEnd) {
   const samples = [];
   for (let y = 0; y < height; y += 2) {
@@ -481,14 +546,34 @@ function buildDownsampledCanvas(canvas, maxWidth) {
   return { canvas: small, scale };
 }
 
-function detectRowBands(canvas) {
-  const { canvas: analysisCanvas, scale } = buildDownsampledCanvas(canvas, BAND_DETECTION_MAX_WIDTH);
+// Grupo 1 de la Guía de seguimiento y resolución de errores — "Fix de
+// anclaje por thumbnail". Extracción de la lógica de banding original
+// (idéntica en su fórmula de threshold/gap, sin cambios), parametrizada
+// por la franja horizontal (xStartRatio/xEndRatio) sobre la que mide
+// distancia de color contra el fondo. Esto permite correr exactamente
+// el mismo algoritmo sobre dos franjas distintas de la fila — el
+// thumbnail (ICON_ZONE_X_START..END) y el texto de stats
+// (STATS_ZONE_X_START..END) — y comparar sus resultados en
+// `detectRowBands`, en vez de depender de una sola franja como fuente
+// única de verdad geométrica.
+//
+// POR QUÉ EL THUMBNAIL ES UN ANCLA MÁS FIABLE: confirmado contra el
+// bundle real de TAPIT.GG (VetoLAB_TAPIT_Analisis_Tecnico.md, §4.3) —
+// el propio selector que usa FACEIT para listar filas de veto exige
+// `:has([src*="games"])`, es decir, ancla cada fila a la presencia de
+// la miniatura del mapa, no al texto. Una miniatura fotográfica de
+// bordes duros produce un salto de contraste contra el fondo oscuro
+// mucho más nítido y estable que el texto disperso (números, %,
+// separador de 4x4px) que mide la franja de stats — que es
+// precisamente la zona donde `pad` puede invadir la fila vecina en
+// layouts compactos (ver bug de winrate fusionado, Grupo 3).
+function detectBandsInZone(analysisCanvas, xStartRatio, xEndRatio) {
   const ctx = analysisCanvas.getContext("2d");
   const { width, height } = analysisCanvas;
   const imgData = ctx.getImageData(0, 0, width, height).data;
 
-  const xStart = Math.floor(width * STATS_ZONE_X_START);
-  const xEnd = Math.floor(width * STATS_ZONE_X_END);
+  const xStart = Math.floor(width * xStartRatio);
+  const xEnd = Math.floor(width * xEndRatio);
   const bg = estimateBackgroundColor(imgData, width, height, xStart, xEnd);
 
   const rowDist = new Float32Array(height);
@@ -535,17 +620,63 @@ function detectRowBands(canvas) {
   const maxH = Math.max(...rawBands.map((b) => b.h));
   const filtered = rawBands.filter((b) => b.h >= maxH * 0.5);
 
+  return { bands: filtered, bg };
+}
+
+// Grupo 1: punto de entrada. Corre la detección sobre AMBAS franjas
+// (thumbnail y texto) y decide cuál usar:
+//
+//   - Si ambas coinciden en el NÚMERO de bandas detectadas (y hay al
+//     menos una), se usan los límites y0/y1 de la franja de
+//     THUMBNAIL — bordes de caja fotográfica más nítidos y estables
+//     que el texto disperso, según lo confirmado en el comentario de
+//     `detectBandsInZone` arriba. El color de fondo (`bg`) SIEMPRE se
+//     toma de la franja de texto, nunca del thumbnail: el "fondo" de
+//     la zona de thumbnail es la propia miniatura fotográfica, no el
+//     fondo oscuro uniforme de la fila, así que no es un valor válido
+//     para `suppressIconColors`/`applyGrayscaleAutocontrast` más
+//     adelante en el pipeline.
+//   - Si divergen (o cualquiera de las dos no detectó nada), se
+//     conserva el comportamiento histórico (franja de texto) como
+//     fallback seguro, y se marca `mismatch: true` para que `runOCR`
+//     pueda adjuntar un warning explícito (`band_source_mismatch`) —
+//     nunca se decide en silencio cuál de las dos lecturas geométricas
+//     divergentes es la correcta.
+function detectRowBands(canvas) {
+  const { canvas: analysisCanvas, scale } = buildDownsampledCanvas(canvas, BAND_DETECTION_MAX_WIDTH);
+
+  const byThumbnail = detectBandsInZone(analysisCanvas, ICON_ZONE_X_START, ICON_ZONE_X_END);
+  const byText = detectBandsInZone(analysisCanvas, STATS_ZONE_X_START, STATS_ZONE_X_END);
+
+  const agree = byThumbnail.bands.length > 0 &&
+    byThumbnail.bands.length === byText.bands.length;
+
+  const chosenBands = agree ? byThumbnail.bands : byText.bands;
+  const source = agree ? "thumbnail" : "text";
+  // Discrepancia real: cualquier desacuerdo en el conteo salvo el caso
+  // "ninguna de las dos zonas detectó nada" (byText.bands.length===0 Y
+  // byThumbnail.bands.length===0), que no es una discrepancia sino una
+  // ausencia total de contenido — ya cubierta más adelante por el
+  // camino normal de "0 filas detectadas" en runOCR, sin necesidad de
+  // un warning adicional. Un thumbnail vacío mientras el texto SÍ
+  // detecta filas (o viceversa) sí es señal real de que la geometría
+  // de esta captura es atípica (recorte sin columna de miniaturas,
+  // franja de stats con ruido ajeno, etc.).
+  const mismatch = !agree && (byThumbnail.bands.length > 0 || byText.bands.length > 0);
+
   // Reescalado de vuelta a la resolución original del canvas de entrada
   // (`canvas`, no `analysisCanvas`) — invisible para quien llama: si
   // `scale === 1` (imagen ya angosta) esto es una identidad exacta.
   const invScale = 1 / scale;
-  const bands = filtered.map((b) => ({
+  const bands = chosenBands.map((b) => ({
     y0: Math.round(b.y0 * invScale),
     y1: Math.round(b.y1 * invScale),
     h: Math.round(b.h * invScale),
   }));
 
-  return { bands, bg };
+  // `bg` siempre proviene de la franja de texto (ver nota arriba) —
+  // nunca de `byThumbnail.bg`.
+  return { bands, bg: byText.bg, source, mismatch };
 }
 
 // Punto 11 de la Matriz de priorización ("fallbackPool depende de un
@@ -580,7 +711,45 @@ function detectRowBands(canvas) {
 // por fila igual que antes; los demás simplemente dejan de arriesgarse
 // a un pool mal dimensionado y usan la ruta que ya existía como
 // respaldo general.
-const RELIABLE_BAND_COUNTS = new Set([3, 7, 8]);
+//
+// ACTUALIZACIÓN (bug real reportado 26/07/2026 — Dust2/Mirage no
+// reconocidos en una captura de 5 filas): la premisa de arriba
+// mezclaba dos preguntas DISTINTAS bajo un solo criterio — "¿el
+// conteo de bandas es geométricamente plausible?" y "¿existe un
+// fallback POSICIONAL confiable si el OCR de texto falla?" — y
+// resolvía ambas con el mismo criterio (`RELIABLE_BAND_COUNTS = {3,7,8}`,
+// idéntico al dominio de `buildFallbackPool`). Evidencia real (Tesseract
+// 5.3.4, misma versión que usa el proyecto, corrido directamente sobre
+// una captura real de 5 filas): con `runWholeImageOCR` (PSM 3,
+// segmentación automática de página completa), Tesseract PERDÍA por
+// completo las líneas de Dust2 y Mirage al segmentar mal el layout de
+// una imagen angosta con thumbnails — no por contraste ni por ruido de
+// ícono, sino por un problema de PSM/segmentación de layout. Con el
+// pipeline por fila (`runPerRowOCR`, PSM 7 — línea única de texto, cada
+// banda ya aislada geométricamente ANTES de correr OCR), las 5 filas
+// se reconocieron limpias, incluyendo Dust2 y Mirage.
+//
+// Es decir: el OCR de texto por fila (PSM 7) es estructuralmente
+// superior al de imagen completa (PSM 3) para este layout, INDEPENDIENTE
+// de si existe o no un pool de fallback posicional confiable para ese
+// conteo. Excluir 4/5/6 de `RELIABLE_BAND_COUNTS` negaba ese beneficio
+// incluso en el caso común (el OCR de texto por fila SÍ reconoce el
+// nombre, y el fallback posicional nunca llega a necesitarse). Por eso
+// `RELIABLE_BAND_COUNTS` se amplía aquí a {3,4,5,6,7,8} — el rango
+// completo que ya cubre `isPlausibleMapCount`/`MIN_PLAUSIBLE_MAP_COUNT`/
+// `MAX_PLAUSIBLE_MAP_COUNT` en parser.js como geométricamente posible
+// dado el pool real de FACEIT esta temporada — mientras que
+// `buildFallbackPool` SIGUE devolviendo `null` para 4/5/6 sin ningún
+// cambio: si en algún caso el OCR de texto por fila SÍ falla en una
+// captura de 4-6 filas, el sistema sigue etiquetando esa fila como
+// "Mapa sin identificar" en vez de inventar una posición falsa, exactamente
+// como ya diseñaba el fix anterior. Ambas propiedades ("conteo confiable
+// para correr el pipeline por fila" y "pool posicional no-nulo") siguen
+// siendo independientes entre sí — ver el comentario de
+// `buildFallbackPool` en parser.js y los tests de `app_regression_test.js`
+// que ya verificaban esta distinción para el caso 3 — solo que ahora
+// también aplica a 4, 5 y 6, no solo a 3.
+const RELIABLE_BAND_COUNTS = new Set([3, 4, 5, 6, 7, 8]);
 
 function looksLikeMapGrid(bands) {
   if (!RELIABLE_BAND_COUNTS.has(bands.length)) return false;
@@ -639,6 +808,22 @@ function applyGrayscaleAutocontrast(ctx, w, h) {
   ctx.putImageData(imgData, 0, 0);
 }
 
+// Grupo 8 #2 de la Guía de seguimiento y resolución de errores —
+// ANTES: solo se suprimía el rango de matiz dorado/ámbar (30-55°),
+// que cubre únicamente el ícono de "mejor mapa" (#c2ae40). Ingeniería
+// inversa directa del componente de íconos de ranking de TAPIT.GG
+// (VetoLAB_TAPIT_Analisis_Tecnico.md, Sección 7.2/12.2) confirmó que
+// existen 4 colores reales, no 1: dorado (mejor), plata/gris (2º
+// mejor — sin matiz dominante, no aplica a este filtro), naranja
+// Tailwind orange-400 #fb923c (2º peor, hue≈24-27°) y rojo Tailwind
+// red-500 #ef4444 (peor, hue≈0-4° y también cerca de 360° por el
+// wraparound circular). El rango anterior dejaba pasar naranja y rojo
+// sin suprimir, interfiriendo potencialmente con el OCR del nombre de
+// mapa cuando el ícono queda pegado al texto. `ICON_HUE_SUPPRESS_RANGES`
+// (ocrConstants.js) ahora cubre los 3 matices cromáticos reales;
+// plata/gris no necesita rango propio porque el filtro de saturación
+// `delta < 40` de abajo ya lo descarta (un gris no tiene un canal
+// dominante).
 function suppressIconColors(ctx, w, h, bgColor) {
   const imgData = ctx.getImageData(0, 0, w, h);
   const d = imgData.data;
@@ -657,9 +842,11 @@ function suppressIconColors(ctx, w, h, bgColor) {
       if (hue < 0) hue += 360;
     }
 
-    const isGoldAmber = hue >= 30 && hue <= 55;
+    const isRankIconHue = APP_OCR_CONST.ICON_HUE_SUPPRESS_RANGES.some(
+      (range) => hue >= range.min && hue <= range.max
+    );
 
-    if (isGoldAmber) {
+    if (isRankIconHue) {
       d[i] = bgColor.r;
       d[i + 1] = bgColor.g;
       d[i + 2] = bgColor.b;
@@ -725,6 +912,117 @@ function cropIconZoneToCanvas(sourceCanvas, band) {
   octx.imageSmoothingQuality = "high";
   octx.drawImage(sourceCanvas, x0, y0, w, h, 0, 0, w, h);
   return out;
+}
+
+// Grupo 11: clasifica un solo píxel como "verde real" / "rojo real" /
+// ninguno, usando dominancia de canal (no solo comparación de matiz)
+// para distinguir el verde/rojo Tailwind real del dorado del ícono de
+// ranking (que en la captura de referencia medida cae en valores como
+// RGB(207,160,29) — R y G ambos altos a la vez, lo que un chequeo
+// ingenuo de "R alto" o "G alto" por separado confundiría con rojo o
+// verde). Ver COMPARISON_COLOR_DOMINANCE arriba para el umbral.
+function classifyComparisonColorPixel(r, g, b) {
+  if (g > 140 && g > r + COMPARISON_COLOR_DOMINANCE && g > b + COMPARISON_COLOR_DOMINANCE) return "green";
+  if (r > 180 && r > g + COMPARISON_COLOR_DOMINANCE * 2 && r > b + COMPARISON_COLOR_DOMINANCE * 2) return "red";
+  return null;
+}
+
+// Grupo 11: muestrea el color dominante (verde/rojo/ninguno) de una
+// de las dos sub-zonas de comparación de una fila, SOBRE EL CANVAS
+// ORIGINAL A COLOR (antes de cropRowToDataURL/applyGrayscaleAutocontrast,
+// que colapsarían el color a luminancia). Cuenta píxeles clasificados
+// en vez de promediar RGB crudo, para tolerar el propio texto blanco
+// del número intercalado dentro de la misma franja (ver estructura
+// real del componente P_ del bundle: el conteo de partidas "n" es
+// blanco fijo, solo el bloque ícono+porcentaje lleva el color
+// condicional) sin que ese blanco diluya el promedio hacia gris.
+//
+// Devuelve "green" / "red" / null (sin dominancia clara — franja
+// gris/empate, mapa ya baneado sin color activo, o zona mal alineada
+// por un layout no estándar). NUNCA se usa como fuente primaria: ver
+// `corroborateSideFromColor` para cómo se combina con el resultado ya
+// obtenido por OCR de texto.
+function sampleComparisonColorSide(sourceCanvas, band, zone) {
+  const pad = Math.max(4, Math.round(band.h * 0.1));
+  const y0 = Math.max(0, band.y0 - pad);
+  const y1 = Math.min(sourceCanvas.height, band.y1 + pad);
+  const fullW = sourceCanvas.width;
+  const x0 = Math.floor(fullW * zone.xStart);
+  const x1 = Math.ceil(fullW * zone.xEnd);
+  const w = Math.max(1, x1 - x0);
+  const h = Math.max(1, y1 - y0);
+
+  const tmp = document.createElement("canvas");
+  tmp.width = w;
+  tmp.height = h;
+  const tctx = tmp.getContext("2d");
+  tctx.drawImage(sourceCanvas, x0, y0, w, h, 0, 0, w, h);
+  const data = tctx.getImageData(0, 0, w, h).data;
+
+  let green = 0, red = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    const cls = classifyComparisonColorPixel(data[i], data[i + 1], data[i + 2]);
+    if (cls === "green") green++;
+    else if (cls === "red") red++;
+  }
+
+  // Exige un mínimo absoluto de píxeles clasificados (no solo mayoría
+  // relativa) para evitar que 2-3 píxeles de ruido JPEG en una franja
+  // mayormente vacía se interpreten como una señal de color real.
+  const MIN_PIXELS = 6;
+  if (green < MIN_PIXELS && red < MIN_PIXELS) return null;
+  return green > red ? "green" : red > green ? "red" : null;
+}
+
+// Grupo 11: punto de entrada de alto nivel. Corrobora qué lado
+// (propio/rival) corresponde a cada mitad de una fila ya parseada,
+// usando el color de comparación como señal visual independiente del
+// texto — análoga en espíritu a `identifyMapByIcon` (Grupo 7), pero
+// para el problema de "lado", no de "qué mapa es". Devuelve
+// `{ consistent: boolean, ownColor, rivalColor } | null`.
+//
+// `consistent` compara el color observado contra lo que el propio
+// signo de `pA - pB` (ya leído por OCR de texto) predeciría bajo la
+// fórmula real de TAPIT (ver comentario de cabecera junto a
+// COMPARISON_COLOR_ZONE_OWN): si pA > pB, el lado propio debería ser
+// verde y el rival rojo; si pA < pB, al revés; si pA === pB, ambos
+// deberían leer como "sin dominancia" (gris), por lo que un resultado
+// de `null` en ambos lados también cuenta como consistente en ese caso.
+//
+// Deliberadamente NO se usa para sobrescribir pA/pB ni para decidir
+// significancia estadística (eso sigue siendo exclusivo de
+// `differenceIsSignificant` en math.js, sobre los números ya leídos) —
+// ver la discusión de por qué la versión "validador de signo" del
+// hallazgo original se descartó (color y texto comparten la misma
+// fuente de error de OCR/recorte, así que no son señales verdaderamente
+// independientes para ese propósito). Su único uso legítimo es como
+// corroboración adicional, expuesta como warning informativo cuando
+// hay discrepancia — nunca como bloqueo ni autocorrección silenciosa.
+function corroborateSideFromColor(sourceCanvas, band, pA, pB) {
+  try {
+    const ownColor = sampleComparisonColorSide(sourceCanvas, band, COMPARISON_COLOR_ZONE_OWN);
+    const rivalColor = sampleComparisonColorSide(sourceCanvas, band, COMPARISON_COLOR_ZONE_RIVAL);
+
+    if (ownColor === null && rivalColor === null) {
+      // Fila sin color activo (mapa ya baneado, ver fila "Nuke" en la
+      // captura de referencia) o zona no alineada — sin base para
+      // corroborar ni para contradecir. No es un warning, es "no hay
+      // señal", tratado igual que `identifyMapByIcon` devolviendo null.
+      return null;
+    }
+
+    const expectedOwn = pA > pB ? "green" : pA < pB ? "red" : null;
+    const expectedRival = pA > pB ? "red" : pA < pB ? "green" : null;
+
+    const consistent = ownColor === expectedOwn && rivalColor === expectedRival;
+    return { consistent, ownColor, rivalColor };
+  } catch (err) {
+    // Mismo criterio de robustez que identifyMapByIcon: un fallo en la
+    // corroboración visual nunca debe romper el pipeline de OCR
+    // principal, es siempre un plus opcional.
+    console.warn("corroborateSideFromColor: no se pudo muestrear el color de comparación:", err);
+    return null;
+  }
 }
 
 async function runPerRowOCR(sourceCanvas, bands, fileName, bg) {
@@ -822,7 +1120,17 @@ async function runPerRowOCR(sourceCanvas, bands, fileName, bg) {
         continue;
       }
 
-      rows.push({ map: mapName, ...nums, nameGuessed, noPoolFallback, iconMatched });
+      // Grupo 11: corroboración de lado vía color de comparación,
+      // ejecutada SOLO cuando ya hay un pA/pB numérico exitoso — nunca
+      // sustituye al patrón numérico, solo lo audita. Un resultado
+      // `null` (sin señal de color, ej. mapa ya baneado o zona sin
+      // dominancia clara) no genera ningún warning: ausencia de señal
+      // no es evidencia de error, igual que `identifyMapByIcon` sin
+      // match no penaliza una fila ya identificada por texto.
+      const colorCheck = corroborateSideFromColor(sourceCanvas, bands[i], nums.pA, nums.pB);
+      const colorSideMismatch = colorCheck !== null && !colorCheck.consistent;
+
+      rows.push({ map: mapName, ...nums, nameGuessed, noPoolFallback, iconMatched, colorSideMismatch });
     }
   } finally {
     await worker.terminate();
@@ -906,7 +1214,7 @@ async function runOCR(file, previewUrl, sourceId) {
     await loadTesseractScript();
 
     const sourceCanvas = await loadImageToCanvas(previewUrl);
-    const { bands, bg } = detectRowBands(sourceCanvas);
+    const { bands, bg, source: bandSource, mismatch: bandSourceMismatch } = detectRowBands(sourceCanvas);
 
     // Grupo 1 #1 de la Guía de seguimiento: se evalúa la plausibilidad
     // geométrica del conteo de bandas ANTES de decidir el pipeline. Un
@@ -933,6 +1241,21 @@ async function runOCR(file, previewUrl, sourceId) {
       validated = validated.map((row) => ({
         ...row,
         warnings: [...(row.warnings || []), { code: "band_count_implausible", params: { count: bands.length } }],
+        needsReview: true,
+      }));
+    }
+
+    // Grupo 1 de la Guía de seguimiento y resolución de errores: el
+    // conteo de bandas por thumbnail y por franja de texto divergió —
+    // se usó la franja de texto como fallback seguro (comportamiento
+    // histórico), pero la discrepancia en sí es una señal de que la
+    // geometría de esta captura es ambigua (layout no estándar,
+    // recorte parcial, thumbnail no visible en alguna fila). Nunca se
+    // decide en silencio cuál de las dos lecturas es la correcta.
+    if (bandSourceMismatch) {
+      validated = validated.map((row) => ({
+        ...row,
+        warnings: [...(row.warnings || []), { code: "band_source_mismatch" }],
         needsReview: true,
       }));
     }

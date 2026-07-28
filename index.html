@@ -652,6 +652,19 @@
       comunidad, no de tu rival específico — actívalos pasando al modo "Detallado" en el switch
       Compacto/Detallado. TAPIT.GG es una fuente de terceros no auditable: revisa siempre los
       valores antes de decidir.
+      <br><br>
+      <!-- Grupo 8 #4 de la Guía de seguimiento y resolución de errores
+           (VetoLAB_TAPIT_Analisis_Tecnico.md, Sección 12.5/2.3/7.3):
+           TAPIT.GG tiene una función opcional de auto-baneo que hace
+           clic automático cada 2 segundos mientras el veto está
+           activo — si justo se captura en ese instante, una fila
+           puede aparecer a mitad de su transición visual a escala de
+           grises. No es ruido de OCR ni un bug de VetoLAB: es una fila
+           real cambiando de estado en el momento exacto de la
+           captura. -->
+      Tip: si alguno de los dos equipos tiene activado el auto-baneo de TAPIT.GG, evita capturar
+      justo en el instante en que un mapa cambia a escala de grises (baneo en curso) — espera un
+      segundo y vuelve a capturar para que esa fila no quede a mitad de transición.
     </div>
   </div>
 </div>
@@ -767,6 +780,13 @@
      iconMatch -> app), que es justo el orden de dependencia que app.js necesita —
      mismo comportamiento que ya tenían por estar al final del <body>,
      ahora declarado explícitamente en vez de depender de la posición. -->
+<!-- Grupo 9 #1 de la Guía de seguimiento y resolución de errores:
+     ocrConstants.js es la fuente única de constantes frágiles de OCR
+     (VetoLAB_TAPIT_Analisis_Tecnico.md, Sección 12.6) — debe cargar
+     ANTES que iconMatch.js/parser.js/app.js, que ahora leen sus
+     valores desde ahí. No depende de i18n/faceitContext/math, así
+     que se coloca primero en el orden. -->
+<script src="ocrConstants.js" defer></script>
 <script src="i18n.js" defer></script>
 <script src="faceitContext.js" defer></script>
 <script src="math.js" defer></script>

@@ -341,5 +341,101 @@ try {
   console.error(`FAIL re-verificación fixture 05 — ${err.message}`);
 }
 
+// ------------------------------------------------------------
+// Test del bug real reportado: "Inferno mal ordenado en Mapas"
+// (Grupo 3 #3.3.1 de la Guía de seguimiento y resolución de errores).
+//
+// CAUSA RAÍZ: la fila real de Inferno era "(100%) 1 • 2 (50%)" — un
+// solo dígito a cada lado del separador. El separador (nunca un
+// carácter de texto real, ver cabecera de ROW_PATTERN) se perdió por
+// completo en el OCR de esta fila puntual, colapsando "1"+"2" en el
+// bloque fusionado "12" — indistinguible en el propio texto de un
+// conteo real de 12 partidas. Ninguno de los tres patrones de rescate
+// previos a este fix distinguía este caso, lo que en el pipeline real
+// dejaba abierta la puerta a que ese "12" se corrompiera absorbiendo
+// dígitos de la fila vecina (Ancient), produciendo un n inflado y un
+// deltaAdj artificialmente alto que desplazó a Inferno al tope de la
+// lista de picks.
+//
+// FIX: ROW_PATTERN_SINGLE_DIGIT_AMBIGUOUS — cuarto patrón de rescate,
+// MÁS estricto que los tres anteriores (exige EXACTAMENTE 1 dígito a
+// cada lado del bloque fusionado, no 1-3), que interpreta el bloque
+// de 2 dígitos consecutivos como nA=1 dígito + nB=1 dígito, y SIEMPRE
+// marca la fila lowConfidence:true.
+// ------------------------------------------------------------
+console.log("\n=== Test del bug real: Inferno mal ordenado — fila de 1 dígito por lado fusionada sin separador (Grupo 3 #3.3.1) ===\n");
+
+const fx10 = FIXTURES.find((f) => f.id === "veto_10_inferno_1digit_fusionado");
+if (fx10) {
+  try {
+    fx10.rows.forEach(({ text, expected }, i) => {
+      const nums = parseRowNumbers(text);
+      assert.ok(nums, `${fx10.id} fila ${i}: parseRowNumbers no encontró números en "${text}"`);
+      assert.strictEqual(nums.pA, expected.pA, `${fx10.id}: pA esperado ${expected.pA}, obtenido ${nums.pA}`);
+      assert.strictEqual(nums.nA, expected.nA, `${fx10.id}: nA esperado ${expected.nA} (dígito único), obtenido ${nums.nA} — ¿se está fusionando "12" como un solo número en vez de 1+2?`);
+      assert.strictEqual(nums.nB, expected.nB, `${fx10.id}: nB esperado ${expected.nB} (dígito único), obtenido ${nums.nB}`);
+      assert.strictEqual(nums.pB, expected.pB, `${fx10.id}: pB esperado ${expected.pB}, obtenido ${nums.pB}`);
+      assert.strictEqual(
+        nums.lowConfidence, true,
+        `${fx10.id}: el rescate de dígito único SIEMPRE debe marcar lowConfidence:true — nunca se asume con la certeza de un separador visible real`
+      );
+
+      const mapName = findMapNameInRow(text);
+      assert.strictEqual(mapName, expected.map, `${fx10.id}: nombre esperado "${expected.map}", obtenido "${mapName}"`);
+    });
+    console.log(`OK   ${fx10.id} — "12" fusionado se interpreta como nA=1/nB=2 (no como n=12 corrupto), marcado lowConfidence — ${fx10.label}`);
+  } catch (err) {
+    failures++;
+    console.error(`FAIL ${fx10.id} — ${err.message}`);
+  }
+} else {
+  failures++;
+  console.error("FAIL veto_10_inferno_1digit_fusionado — fixture no encontrada en fixtures.js");
+}
+
+console.log("\n--- ROW_PATTERN_SINGLE_DIGIT_AMBIGUOUS: no debe interferir con conteos reales de 2+ dígitos ya cubiertos por patrones anteriores ---");
+
+const noRegressionCases = [
+  {
+    label: "conteo real de 2 dígitos separados por un espacio simple (ya es un separador válido de 1-5 chars para ROW_PATTERN) — no debe reinterpretarse como 2 dígitos únicos",
+    text: "(43%) 30 22 (40%)",
+    expected: { pA: 43, nA: 30, nB: 22, pB: 40 },
+    expectLowConfidence: false, // ROW_PATTERN principal ya lo captura (el espacio " " matchea [^\d(]{1,5}) — comportamiento preexistente, sin cambios por este fix
+  },
+  {
+    label: "fila limpia con separador real de 1 solo dígito por lado — debe seguir leyendo con ROW_PATTERN normal, sin degradar a lowConfidence",
+    text: "(100%) 1 © 2 (50%)",
+    expected: { pA: 100, nA: 1, nB: 2, pB: 50 },
+    expectLowConfidence: false,
+  },
+  {
+    label: "conteo real de 3 dígitos fusionado (ej. 127 de 12•7) — el patrón de 1 dígito NO debe intentar partir esto, debe seguir sin matchear vía el rescate nuevo",
+    text: "(50%) 127 (60%)",
+    expected: null, // ningún patrón (incluyendo el nuevo, que exige exactamente 2 dígitos en el bloque) debe rescatar un bloque de 3 dígitos
+  },
+];
+
+for (const c of noRegressionCases) {
+  try {
+    const nums = parseRowNumbers(c.text);
+    if (c.expected === null) {
+      assert.strictEqual(nums, null, `se esperaba null para "${c.text}", se obtuvo ${JSON.stringify(nums)}`);
+    } else {
+      assert.ok(nums, `parseRowNumbers no encontró números en "${c.text}"`);
+      assert.strictEqual(nums.pA, c.expected.pA);
+      assert.strictEqual(nums.nA, c.expected.nA);
+      assert.strictEqual(nums.nB, c.expected.nB);
+      assert.strictEqual(nums.pB, c.expected.pB);
+      if (c.expectLowConfidence !== undefined) {
+        assert.strictEqual(!!nums.lowConfidence, c.expectLowConfidence);
+      }
+    }
+    console.log(`OK   ${c.label}`);
+  } catch (err) {
+    failures++;
+    console.error(`FAIL ${c.label} — ${err.message}`);
+  }
+}
+
 console.log(`\n${failures === 0 ? "✔ Todos los tests pasaron." : `✘ ${failures} test(s) fallaron.`}`);
 process.exit(failures === 0 ? 0 : 1);

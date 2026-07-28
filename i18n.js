@@ -51,6 +51,7 @@ const I18N = {
     "warning.name_collision_same_capture": "nombre de mapa duplicado en esta captura — se detectaron dos filas para el mismo mapa, revisa cuál es correcta",
     "warning.name_collision_cross_source": "nombre de mapa duplicado entre distintas capturas — se detectó este mapa en más de una imagen subida, revisa cuál es correcta",
     "warning.band_count_implausible": "conteo de filas geométricamente imposible ({count}) — el pool de veto de esta temporada solo puede tener entre 3 y 8 mapas, revisa el recorte de la captura",
+    "warning.band_source_mismatch": "la detección de filas por miniatura y por texto no coincidieron — se usó el método de respaldo, verifica que ninguna fila se haya perdido o fusionado",
 
     // ---- math.js: dirección de sesgo por asimetría muestral (Sección 4.3) ----
     "bias.a": "Tu muestra es más grande y estable; el winrate rival (menos partidas) tiende a regresar hacia 50%. La ventaja real probablemente esté subestimada por el diferencial crudo.",
@@ -101,6 +102,7 @@ const I18N = {
     "warning.name_collision_same_capture": "duplicate map name within this capture — two rows were detected for the same map, please check which one is correct",
     "warning.name_collision_cross_source": "duplicate map name across different captures — this map was detected in more than one uploaded image, please check which one is correct",
     "warning.band_count_implausible": "geometrically impossible row count ({count}) — this season's veto pool can only have between 3 and 8 maps, please check the capture's crop",
+    "warning.band_source_mismatch": "row detection by thumbnail and by text did not agree — fallback method used, verify no row was lost or merged",
 
     // ---- math.js: sample-asymmetry bias direction (Section 4.3) ----
     "bias.a": "Your sample is larger and more stable; the opponent's winrate (fewer games) tends to regress toward 50%. The raw differential likely understates your real advantage.",

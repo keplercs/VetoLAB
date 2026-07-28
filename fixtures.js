@@ -358,6 +358,37 @@ An¢ient (25%) 12 © 18 (72%)
 Inferno (60%) 5 © 2 (100%)
 `.trim(),
   },
+  {
+    id: "veto_10_inferno_1digit_fusionado",
+    label: "Grupo 3 #3.3.1 — Inferno mal ordenado: fila de 1 dígito por lado con separador perdido, fusionado en un bloque de 2 dígitos ('1•2' -> '12')",
+    kind: "per-row",
+    // Reproduce el bug real reportado: "Inferno mal ordenado en Mapas".
+    // La fila real era "(100%) 1 • 2 (50%)" — un solo dígito a cada
+    // lado del separador. Cuando el separador (nunca un carácter de
+    // texto real, ver cabecera de ROW_PATTERN en parser.js) se pierde
+    // POR COMPLETO en el OCR de esta fila puntual, el texto colapsa a
+    // "12" — indistinguible en el propio texto de un conteo real de
+    // 12 partidas. Antes del fix 3.3.1, ninguno de los tres patrones
+    // de rescate existentes distinguía este caso (ROW_PATTERN exige
+    // 1-5 caracteres no-dígito entre nA/nB; ROW_PATTERN_NO_SEP exige
+    // al menos un espacio; ROW_PATTERN_NO_OPEN_PAREN hereda la misma
+    // exigencia que ROW_PATTERN), lo que en el pipeline por fila real
+    // dejaba la puerta abierta a que ese "12" se interpretara mal o se
+    // corrompiera absorbiendo dígitos de la fila vecina (Ancient).
+    //
+    // El fix agrega ROW_PATTERN_SINGLE_DIGIT_AMBIGUOUS: un cuarto
+    // patrón de rescate, MÁS estricto (exige EXACTAMENTE 1 dígito a
+    // cada lado, no 1-3), que interpreta el bloque fusionado de
+    // exactamente 2 dígitos como nA=1 dígito + nB=1 dígito, y SIEMPRE
+    // marca la fila lowConfidence:true para que el warning
+    // low_confidence_separator la señale para revisión manual.
+    rows: [
+      {
+        text: "Inferno (100%) 12 (50%)",
+        expected: { map: "Inferno", pA: 100, nA: 1, nB: 2, pB: 50 },
+      },
+    ],
+  },
 ];
 
 if (typeof module !== "undefined") {

@@ -78,17 +78,39 @@
  * de referencia y agregar la entrada correspondiente aquí.
  */
 const MAP_ICON_REFERENCE_HASHES = {
-  Dust2: 0x81cdc73677772565n,
-  Mirage: 0x6672dcec90b21131n,
-  Nuke: 0x6b4b13d6d772fc97n,
-  Ancient: 0xc6ce4630227253d9n,
-  Inferno: 0xf93bf1d1dddffcfcn,
-  Anubis: 0x88c8c8b9c9c9e0f8n,
-  Cache: 0x1010c8cdad7976cen,
-  // NOTA: "Vertigo" (SEASONAL_OPTIONAL_MAPS en parser.js) no tiene
-  // referencia todavía — no disponible en FACEIT al momento de
-  // generar este módulo. No se agrega una entrada placeholder/vacía a
-  // propósito: una entrada ausente es indistinguible de "no
+  // Regenerados desde las miniaturas oficiales y públicas de FACEIT
+  // (distribution.faceit-cdn.net, URLs confirmadas por ingeniería
+  // inversa del bundle de TAPIT.GG — ver VetoLAB_TAPIT_Analisis_Tecnico.md
+  // §4.3/§12.3 y regenerate_icon_hashes.js) en vez de capturas de
+  // pantalla propias. Mismo algoritmo dHash 8x8 exacto, verificado
+  // bit a bit contra dHashFromGrayscale de este archivo (ver
+  // tests/dhash_parity_regression_test.js, 22/22 casos coinciden).
+  //
+  // MARGEN REAL VERIFICADO (distinto del ~24-25 bits documentado en la
+  // cabecera de este archivo, que correspondía a las referencias
+  // caseras anteriores): con estas 8 imágenes oficiales, la distancia
+  // de Hamming mínima entre dos mapas DISTINTOS es 21 bits (Mirage vs
+  // Train) — 5 bits de margen sobre MATCH_THRESHOLD_BITS=16, no ~8-9
+  // como sugería el análisis original. `iconMatch_regression_test.js`
+  // ("Distancia de Hamming cruzada... >= MATCH_THRESHOLD_BITS") sigue
+  // en verde con este margen, pero es más ajustado — vale la pena
+  // revalidar este número si se agregan Cache/Vertigo más adelante,
+  // antes de asumir que el margen seguirá siendo tan amplio como con
+  // el set anterior.
+  Dust2: 0x7e7a308988889a9en,
+  Mirage: 0xb88d23234eccc60fn,
+  Nuke: 0x94e428288d0159c3n,
+  Ancient: 0x393128cd9dac2e36n,
+  Train: 0x88d3612129c9871bn,
+  Inferno: 0x68c0e2a21030315n,
+  Overpass: 0x5d1a13030b0b0502n,
+  Anubis: 0x77373756362b1f07n,
+  // NOTA: "Cache" y "Vertigo" no tienen referencia todavía. Cache no
+  // tiene URL en distribution.faceit-cdn.net en el bundle analizado
+  // (usa una ruta distinta con un ID truncado, ver
+  // VetoLAB_TAPIT_Analisis_Tecnico.md §4.3); Vertigo no tiene URL
+  // conocida en absoluto. No se agrega una entrada placeholder/vacía
+  // a propósito: una entrada ausente es indistinguible de "no
   // corrobora", que es el comportamiento correcto mientras no exista
   // una referencia real que hashear.
 };
@@ -100,7 +122,17 @@ const MAP_ICON_REFERENCE_HASHES = {
 // medio de ese margen — ni tan ajustado que un jitter normal de
 // recorte/compresión lo rompa, ni tan laxo que se acerque al régimen
 // de "mapas distintos".
-const MATCH_THRESHOLD_BITS = 16;
+// Grupo 9 #1 de la Guía de seguimiento y resolución de errores —
+// "Externalizar constantes de OCR frágiles a un lugar único,
+// versionable" (VetoLAB_TAPIT_Analisis_Tecnico.md, Sección 12.6). El
+// VALOR (16) no cambia, solo su ubicación canónica — ver
+// ocrConstants.js para el detalle del patrón Node/navegador (en
+// resumen: en Node se importa explícitamente; en el navegador,
+// ocrConstants.js ya se cargó como <script> anterior y el objeto de
+// abajo solo LEE ese const global ya existente, nunca lo redeclara).
+const ICONMATCH_OCR_CONST = (typeof module !== "undefined")
+  ? require("./ocrConstants.js")
+  : { MATCH_THRESHOLD_BITS }; // lectura del const global ya cargado (navegador) — nunca se redeclara el mismo nombre
 const HASH_SIZE = 8; // dHash 8x8 = 64 bits
 
 /**
@@ -210,7 +242,7 @@ function matchIconHash(hash) {
       best = { map, distance: d };
     }
   }
-  if (best === null || best.distance >= MATCH_THRESHOLD_BITS) return null;
+  if (best === null || best.distance >= ICONMATCH_OCR_CONST.MATCH_THRESHOLD_BITS) return null;
   return best;
 }
 
@@ -240,7 +272,7 @@ function identifyMapByIcon(iconCanvas) {
 
 if (typeof module !== "undefined") {
   module.exports = {
-    MAP_ICON_REFERENCE_HASHES, MATCH_THRESHOLD_BITS, HASH_SIZE,
+    MAP_ICON_REFERENCE_HASHES, MATCH_THRESHOLD_BITS: ICONMATCH_OCR_CONST.MATCH_THRESHOLD_BITS, HASH_SIZE,
     hammingDistance, dHashFromGrayscale, computeDHash, matchIconHash,
     identifyMapByIcon,
   };

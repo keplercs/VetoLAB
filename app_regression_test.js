@@ -58,7 +58,7 @@ const appSource = fs.readFileSync(path.join(__dirname, "app.js"), "utf8");
 // presente en app.js — si cualquiera de las anclas deja de existir
 // porque la función se renombró o se movió, este test falla
 // explícitamente en vez de silenciosamente probar una versión vieja.
-const startAnchor = "const RELIABLE_BAND_COUNTS = new Set([3, 7, 8]);";
+const startAnchor = "const RELIABLE_BAND_COUNTS = new Set([3, 4, 5, 6, 7, 8]);";
 const endAnchorFn = "function looksLikeMapGrid(bands) {";
 const startIdx = appSource.indexOf(startAnchor);
 const fnStartIdx = appSource.indexOf(endAnchorFn, startIdx);
@@ -143,24 +143,50 @@ check("looksLikeMapGrid: 8 bandas uniformes -> true (pool + mapa opcional Vertig
 });
 
 // ------------------------------------------------------------
-// 2. Conteos NO confiables: deben degradar (false), aunque las
-//    alturas sean perfectamente uniformes — este es exactamente el
-//    caso que el punto 11 corrige (antes pasaban con bands.length
-//    entre 3 y 10 sin más chequeo que la uniformidad de altura).
+// Bug real reportado 26/07/2026 — Dust2/Mirage no reconocidos en una
+// captura real de 5 filas. Evidencia (Tesseract 5.3.4, misma versión
+// del proyecto, corrida directamente sobre la captura real): con
+// `runWholeImageOCR` (PSM 3, el que corría antes para 4/5/6 bandas por
+// no pertenecer a RELIABLE_BAND_COUNTS), Tesseract perdía por completo
+// las líneas de Dust2 y Mirage al segmentar mal el layout de una
+// imagen angosta con thumbnails — un problema de PSM/segmentación de
+// layout, no de contraste ni de ruido de ícono. Con el pipeline por
+// fila (`runPerRowOCR`, PSM 7 — línea única, banda ya aislada
+// geométricamente), las 5 filas se reconocieron limpias, incluyendo
+// Dust2 y Mirage.
+//
+// Esto invierte la conclusión anterior para 4/5/6: el pipeline por
+// fila es estructuralmente superior para el OCR de TEXTO en sí,
+// independientemente de si existe o no un pool de fallback POSICIONAL
+// confiable para ese conteo (esa es una pregunta distinta, que sigue
+// resolviendo `buildFallbackPool` en parser.js sin cambios — ver
+// bloque de verificación cruzada más abajo). Por eso 4/5/6 se mueven
+// aquí, a la sección de conteos CONFIABLES para correr el pipeline por
+// fila.
+// ------------------------------------------------------------
+console.log("\n--- Conteos 4, 5, 6: TAMBIÉN deben aprobar el pipeline por fila (actualizado tras bug real 26/07/2026) ---");
+
+check("looksLikeMapGrid: 4 bandas uniformes -> true (actualizado: el pipeline por fila con PSM 7 reconoce el nombre mejor que PSM 3 de imagen completa, independiente del fallback posicional)", () => {
+  assert.strictEqual(looksLikeMapGrid(makeBands(4)), true);
+});
+
+check("looksLikeMapGrid: 5 bandas uniformes -> true (actualizado — caso real reportado: captura de 5 filas donde PSM 3 perdía Dust2/Mirage y PSM 7 por fila las reconoció correctamente)", () => {
+  assert.strictEqual(looksLikeMapGrid(makeBands(5)), true);
+});
+
+check("looksLikeMapGrid: 6 bandas uniformes -> true (actualizado; sigue sin existir fallback posicional para este conteo — ver buildFallbackPool — pero eso ya no impide usar el pipeline por fila, que resuelve el nombre por OCR de texto en la gran mayoría de los casos)", () => {
+  assert.strictEqual(looksLikeMapGrid(makeBands(6)), true);
+});
+
+// ------------------------------------------------------------
+// Conteos NO confiables: deben seguir degradando (false). Estos NO
+// cambiaron con la actualización de 4/5/6 — siguen fuera del rango
+// geométricamente plausible del pool de veto de FACEIT esta temporada
+// (isPlausibleMapCount/MIN_PLAUSIBLE_MAP_COUNT/MAX_PLAUSIBLE_MAP_COUNT
+// en parser.js: 3 a 8 inclusive), así que no tiene sentido intentar
+// segmentar bandas para un conteo que ya se sabe imposible.
 // ------------------------------------------------------------
 console.log("\n--- Conteos NO confiables: deben degradar a runWholeImageOCR ---");
-
-check("looksLikeMapGrid: 4 bandas uniformes -> false (antes del fix: true)", () => {
-  assert.strictEqual(looksLikeMapGrid(makeBands(4)), false);
-});
-
-check("looksLikeMapGrid: 5 bandas uniformes -> false (antes del fix: true)", () => {
-  assert.strictEqual(looksLikeMapGrid(makeBands(5)), false);
-});
-
-check("looksLikeMapGrid: 6 bandas uniformes -> false (antes del fix: true) — el caso citado explícitamente en el hallazgo 11 (6 bandas mal contadas de un caso realmente-7)", () => {
-  assert.strictEqual(looksLikeMapGrid(makeBands(6)), false);
-});
 
 check("looksLikeMapGrid: 9 bandas uniformes -> false (antes del fix: true)", () => {
   assert.strictEqual(looksLikeMapGrid(makeBands(9)), false);
@@ -202,17 +228,23 @@ check("looksLikeMapGrid: 8 bandas con alturas dentro del margen (< 2.2x) -> true
 });
 
 // ------------------------------------------------------------
-// 4. RELIABLE_BAND_COUNTS debe ser exactamente {3, 7, 8} — coherente
-//    con los tres casos que buildFallbackPool (parser.js) resuelve de
-//    forma confiable (ver parser.js: rowCount===7 -> STANDARD_ORDER,
-//    rowCount===8 -> STANDARD_ORDER+Vertigo, rowCount<7 -> null salvo
-//    el caso 3 mapas de Premium con doble baneo, que se maneja como
-//    "sin nombre inventado" en vez de un orden posicional).
+// 4. RELIABLE_BAND_COUNTS debe ser exactamente {3, 4, 5, 6, 7, 8}
+//    (actualizado tras el bug real del 26/07/2026) — el rango completo
+//    geométricamente plausible (isPlausibleMapCount/MIN_PLAUSIBLE_MAP_COUNT/
+//    MAX_PLAUSIBLE_MAP_COUNT en parser.js), NO solo los tres casos donde
+//    buildFallbackPool tiene un pool POSICIONAL confiable. Estas dos
+//    propiedades ya no coinciden a propósito: "conteo confiable para
+//    correr el pipeline por fila" ahora depende de si el conteo es
+//    geométricamente plausible (¿podría ser una captura real?), no de
+//    si existe una posición de fallback que inventar si el OCR de
+//    texto falla — esa sigue siendo la pregunta distinta que resuelve
+//    `buildFallbackPool`, con su propio comportamiento sin cambios
+//    (ver bloque de verificación cruzada más abajo).
 // ------------------------------------------------------------
-console.log("\n--- Coherencia con buildFallbackPool (parser.js) ---");
+console.log("\n--- Coherencia con isPlausibleMapCount (parser.js) ---");
 
-check("RELIABLE_BAND_COUNTS contiene exactamente {3, 7, 8}, ni más ni menos", () => {
-  const expected = new Set([3, 7, 8]);
+check("RELIABLE_BAND_COUNTS contiene exactamente {3, 4, 5, 6, 7, 8}, ni más ni menos", () => {
+  const expected = new Set([3, 4, 5, 6, 7, 8]);
   assert.strictEqual(RELIABLE_BAND_COUNTS.size, expected.size, "tamaño de RELIABLE_BAND_COUNTS inesperado");
   for (const n of expected) {
     assert.ok(RELIABLE_BAND_COUNTS.has(n), `RELIABLE_BAND_COUNTS debería incluir ${n}`);
@@ -266,19 +298,29 @@ try {
   // buildFallbackPool no colapse 4/5/6 dentro de la rama de >8 por
   // error de rango.
   //
-  // NOTA sobre looksLikeMapGrid: a diferencia de n=3 (que SÍ pertenece
-  // a RELIABLE_BAND_COUNTS y por tanto pasa el pipeline por fila),
-  // 4/5/6 NO pertenecen a ese set — looksLikeMapGrid(4/5/6) debe
-  // seguir siendo false (ver bloque de tests más arriba en este mismo
-  // archivo). Esa es precisamente la asimetría documentada en el
-  // comentario de buildFallbackPool en parser.js: "conteo de bandas
-  // confiable" (RELIABLE_BAND_COUNTS, decide si corre el pipeline por
-  // fila) y "pool posicional no-nulo" (buildFallbackPool, decide si
-  // hay nombres que asignar por posición) son propiedades
-  // relacionadas pero distintas. Por eso aquí NO se repite una
-  // aserción sobre looksLikeMapGrid para 4/5/6 — ya está cubierta
-  // arriba, y afirmar aquí que "debe aceptarlo igualmente" como en el
-  // caso de n=3 sería incorrecto y contradictorio con esos tests.
+  // ACTUALIZACIÓN (bug real reportado 26/07/2026): la nota original
+  // aquí afirmaba que looksLikeMapGrid(4/5/6) debía seguir siendo
+  // `false`, a diferencia de n=3. Esa afirmación quedó OBSOLETA tras
+  // el fix del bug real de Dust2/Mirage no reconocidos — ver el
+  // comentario extenso junto a `RELIABLE_BAND_COUNTS` en app.js:
+  // el pipeline por fila (PSM 7) demostró ser superior al de imagen
+  // completa (PSM 3) para el OCR de texto en sí, independientemente de
+  // si existe fallback posicional. Por eso `RELIABLE_BAND_COUNTS` se
+  // amplió a {3,4,5,6,7,8}, y looksLikeMapGrid(4/5/6) ahora es `true`,
+  // igual que ya lo era para 3 — misma asimetría de siempre (pipeline
+  // por fila SÍ corre; pool posicional sigue sin existir para estos
+  // tres conteos), solo que ahora aplica a los tres, no solo a uno.
+  // Los tests de `looksLikeMapGrid` para 4/5/6 viven arriba en este
+  // mismo archivo (sección "Conteos 4, 5, 6: TAMBIÉN deben aprobar el
+  // pipeline por fila"); aquí se agrega la aserción explícita de la
+  // asimetría, análoga a la de n=3 dos bloques arriba.
+  check("n=4/5/6: buildFallbackPool sigue NULO, pero looksLikeMapGrid ahora SÍ los acepta — misma asimetría que ya existía para n=3, ahora extendida", () => {
+    for (const n of [4, 5, 6]) {
+      assert.strictEqual(buildFallbackPool(n), null, `buildFallbackPool(${n}) debe seguir siendo null por diseño`);
+      assert.strictEqual(looksLikeMapGrid(makeBands(n)), true, `looksLikeMapGrid debe aceptar ${n} bandas tras el fix del 26/07/2026`);
+    }
+  });
+
   check("n=4 (variante intermedia, ej. doble baneo asimétrico): buildFallbackPool debe ser NULO, mismo tratamiento que n=3 — no debe confundirse con el fallback conservador de '>8'", () => {
     assert.strictEqual(buildFallbackPool(4), null, "buildFallbackPool(4) debe ser null, igual que buildFallbackPool(3)");
   });
